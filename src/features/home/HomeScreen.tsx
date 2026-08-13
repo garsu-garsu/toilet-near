@@ -1,0 +1,335 @@
+import { Device } from "@apps-in-toss/web-framework";
+import { useCallback, useEffect, useMemo, useState } from "react";
+
+import { ImageBannerAd } from "../../components/BannerAd";
+import { DetailSheet } from "../../components/DetailSheet";
+import { MapView } from "../../components/MapView";
+import { Card } from "../../components/ScreenLayout";
+import { EVENT, track, trackScreen } from "../../lib/analytics";
+import { formatDistance, walkMinutes, type LatLng } from "../../lib/geo";
+import { hoursLabel } from "../../lib/hours";
+import {
+  directionsUrl,
+  findNearby,
+  RADIUS_OPTIONS,
+  withinRadius,
+  type Radius,
+  type Toilet,
+} from "../../lib/toilets";
+import { palette, stateStyle } from "../../theme";
+
+type Phase =
+  | { k: "locating" }
+  | { k: "ready"; me: LatLng; all: Toilet[] }
+  | { k: "denied" }
+  | { k: "error"; message: string };
+
+type Tab = "map" | "list";
+
+export function HomeScreen() {
+  const [phase, setPhase] = useState<Phase>({ k: "locating" });
+  const [tab, setTab] = useState<Tab>("map");
+  const [radius, setRadius] = useState<Radius>(1000);
+  const [picked, setPicked] = useState<Toilet | null>(null);
+
+  const locate = useCallback(async () => {
+    setPhase({ k: "locating" });
+    try {
+      // accuracy 를 최고로 올리면 실내에서 GPS 를 붙잡느라 몇 초씩 걸려요.
+      // 수십 미터면 충분한 앱이라 Balanced(3) 로 받습니다.
+      const loc = await Device.getLocation({ accuracy: 3 });
+      const me = { lat: loc.coords.latitude, lng: loc.coords.longitude };
+      track(EVENT.locationGranted);
+      const all = await findNearby(me);
+      track(EVENT.nearbyFound, { count: all.length });
+      setPhase({ k: "ready", me, all });
+    } catch (err) {
+      const name = err instanceof Error ? err.name : "";
+      if (name.includes("Permission")) {
+        track(EVENT.locationDenied);
+        setPhase({ k: "denied" });
+        return;
+      }
+      setPhase({ k: "error", message: "위치를 확인하지 못했어요. 다시 눌러주세요." });
+    }
+  }, []);
+
+  // 급한 사람에게 버튼을 한 번 더 누르게 하지 않아요. 열자마자 찾습니다.
+  useEffect(() => {
+    trackScreen("home");
+    void locate();
+  }, [locate]);
+
+  const list = useMemo(
+    () => (phase.k === "ready" ? withinRadius(phase.all, radius) : []),
+    [phase, radius],
+  );
+
+  // 반경을 좁혔을 때 밖으로 나간 곳이 상세로 떠 있으면 안 돼요.
+  useEffect(() => {
+    if (picked != null && !list.includes(picked)) setPicked(null);
+  }, [list, picked]);
+
+  const openDirections = (t: Toilet) => {
+    track(EVENT.directionsOpened, { name: t.name, distance: Math.round(t.distance) });
+    void Device.openURL(directionsUrl(t));
+  };
+
+  return (
+    <div style={{ height: "100%", display: "flex", flexDirection: "column", background: palette.bg }}>
+      {/* ---------------------------------------------------------- 본문 */}
+      <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
+        {phase.k === "locating" && <Center><Notice text="주변을 찾고 있어요…" /></Center>}
+
+        {phase.k === "denied" && (
+          <Center>
+            <Notice
+              text="위치를 알아야 가까운 곳을 찾을 수 있어요."
+              action={{ label: "위치 허용하고 찾기", onClick: () => void locate() }}
+            />
+          </Center>
+        )}
+
+        {phase.k === "error" && (
+          <Center>
+            <Notice text={phase.message} action={{ label: "다시 찾기", onClick: () => void locate() }} />
+          </Center>
+        )}
+
+        {phase.k === "ready" && (
+          <>
+            <RadiusPicker value={radius} onChange={setRadius} count={list.length} />
+
+            {tab === "map" ? (
+              <div style={{ position: "absolute", inset: "56px 0 0", overflow: "hidden" }}>
+                <MapView me={phase.me} toilets={list} radius={radius} onSelect={setPicked} />
+                {picked != null && (
+                  <DetailSheet
+                    t={picked}
+                    onClose={() => setPicked(null)}
+                    onGo={() => openDirections(picked)}
+                  />
+                )}
+              </div>
+            ) : (
+              <ListPane list={list} onGo={openDirections} />
+            )}
+          </>
+        )}
+      </div>
+
+      {/* ------------------------------------------------------- 하단 탭 */}
+      <nav
+        style={{
+          flexShrink: 0,
+          display: "flex",
+          borderTop: `1px solid rgba(27,29,33,0.08)`,
+          background: palette.white,
+        }}
+      >
+        <TabButton active={tab === "map"} onClick={() => setTab("map")} label="지도" />
+        <TabButton active={tab === "list"} onClick={() => setTab("list")} label="목록" />
+      </nav>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ 조각 */
+
+function RadiusPicker({
+  value,
+  onChange,
+  count,
+}: {
+  value: Radius;
+  onChange: (r: Radius) => void;
+  count: number;
+}) {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        top: 0,
+        left: 0,
+        right: 0,
+        height: 56,
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "0 16px",
+        background: palette.bg,
+        zIndex: 2,
+      }}
+    >
+      {RADIUS_OPTIONS.map((r) => (
+        <button
+          key={r}
+          onClick={() => onChange(r)}
+          style={{
+            border: "none",
+            borderRadius: 999,
+            padding: "8px 14px",
+            fontSize: 14,
+            fontWeight: 700,
+            color: value === r ? palette.white : palette.sub,
+            background: value === r ? palette.primary : "rgba(27,29,33,0.06)",
+          }}
+        >
+          {r < 1000 ? `${r}m` : `${r / 1000}km`}
+        </button>
+      ))}
+      <span style={{ marginLeft: "auto", fontSize: 13, color: palette.sub }}>{count}곳</span>
+    </div>
+  );
+}
+
+function ListPane({ list, onGo }: { list: Toilet[]; onGo: (t: Toilet) => void }) {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        inset: "56px 0 0",
+        overflowY: "auto",
+        WebkitOverflowScrolling: "touch",
+        padding: "0 16px 24px",
+      }}
+    >
+      {list.length === 0 ? (
+        <Notice text="이 반경에는 등록된 화장실이 없어요. 반경을 넓혀보세요." />
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {list.map((t, i) => (
+            <ToiletRow key={`${t.lat},${t.lng},${i}`} t={t} onGo={() => onGo(t)} />
+          ))}
+        </div>
+      )}
+
+      {/* 이미지형 배너 — 목록을 끝까지 내린 사람에게만 보여요. */}
+      <div style={{ marginTop: 24 }}>
+        <ImageBannerAd />
+      </div>
+
+      <p style={{ fontSize: 12, color: palette.sub, marginTop: 16, lineHeight: 1.6 }}>
+        행정안전부 전국공중화장실·공공시설개방정보 표준데이터 기준이에요.
+        현장 사정으로 닫혀 있을 수 있어요.
+      </p>
+    </div>
+  );
+}
+
+function ToiletRow({ t, onGo }: { t: Toilet; onGo: () => void }) {
+  const s = stateStyle(t.state);
+  return (
+    <Card>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+            {/* 색만으로 구분하지 않아요 — 햇빛 아래에선 파랑/회색이 잘 안 갈려요. */}
+            <span style={{ width: 8, height: 8, borderRadius: 4, background: s.color }} />
+            <span style={{ fontSize: 13, fontWeight: 700, color: s.color }}>{s.label}</span>
+            <span style={{ fontSize: 13, color: palette.sub }}>· {hoursLabel(t.hours)}</span>
+          </div>
+          <div
+            style={{
+              fontSize: 17,
+              fontWeight: 700,
+              color: palette.ink,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {t.name}
+          </div>
+          <div style={{ fontSize: 14, color: palette.sub, marginTop: 2 }}>
+            {formatDistance(t.distance)} · 걸어서 {walkMinutes(t.distance)}분
+          </div>
+        </div>
+
+        <button
+          onClick={onGo}
+          style={{
+            flexShrink: 0,
+            border: "none",
+            borderRadius: 12,
+            padding: "12px 16px",
+            fontSize: 15,
+            fontWeight: 700,
+            color: palette.white,
+            background: palette.primary,
+          }}
+        >
+          길찾기
+        </button>
+      </div>
+    </Card>
+  );
+}
+
+function TabButton({
+  active,
+  onClick,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        flex: 1,
+        border: "none",
+        background: "transparent",
+        padding: "14px 0",
+        fontSize: 16,
+        fontWeight: 700,
+        color: active ? palette.primary : palette.sub,
+        borderTop: `3px solid ${active ? palette.primary : "transparent"}`,
+        marginTop: -1,
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
+function Center({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{ height: "100%", display: "grid", placeItems: "center", padding: 20 }}>
+      {children}
+    </div>
+  );
+}
+
+function Notice({
+  text,
+  action,
+}: {
+  text: string;
+  action?: { label: string; onClick: () => void };
+}) {
+  return (
+    <Card style={{ textAlign: "center", padding: 24 }}>
+      <p style={{ fontSize: 15, color: palette.sub, margin: 0, lineHeight: 1.6 }}>{text}</p>
+      {action != null && (
+        <button
+          onClick={action.onClick}
+          style={{
+            marginTop: 16,
+            border: "none",
+            borderRadius: 12,
+            padding: "14px 20px",
+            fontSize: 16,
+            fontWeight: 700,
+            color: palette.white,
+            background: palette.primary,
+          }}
+        >
+          {action.label}
+        </button>
+      )}
+    </Card>
+  );
+}
