@@ -51,9 +51,21 @@ export function MapView({ me, toilets, radius, onSelect }: Props) {
       maxZoom: 19,
       attribution: TILE_ATTRIBUTION,
     });
-    // 타일이 막히면(브이월드 도메인 검사 등) 회색 화면만 남아요.
-    // 그 상태를 사용자에게 알려주고 목록 탭으로 보냅니다.
-    tiles.on("tileerror", () => setTileFailed(true));
+    /*
+     * 타일이 통째로 막히면(브이월드 도메인 검사, 호출 한도 등) 빈 화면만 남아요.
+     * 그때만 안내를 띄우고 목록 탭으로 보냅니다.
+     *
+     * 한두 장 실패로 판정하면 안 돼요 — 타일은 원래 가끔 빠지는데,
+     * 지도가 멀쩡히 그려진 위에 "못 불러왔어요" 를 덮으면 더 이상합니다.
+     * 한 장이라도 떴으면 지도는 쓸 수 있는 상태예요.
+     */
+    let anyLoaded = false;
+    tiles.on("tileload", () => {
+      anyLoaded = true;
+    });
+    tiles.on("tileerror", () => {
+      if (!anyLoaded) setTileFailed(true);
+    });
     tiles.addTo(map);
 
     // 내 위치는 작은 원으로. 마커로 찍으면 화장실 핀과 헷갈려요.
@@ -102,7 +114,14 @@ export function MapView({ me, toilets, radius, onSelect }: Props) {
 
     for (const t of toilets) {
       const { color } = stateStyle(t.state);
-      L.marker([t.lat, t.lng], { icon: pinIcon(color) })
+      // 닫힌 곳도 지도에는 보여주되 뒤로 물러나게 해요. 지금 갈 수 있는 곳이
+      // 먼저 눈에 들어와야 하니까요. 목록에서 빼버리면 "저기 있는데 왜 안 보이지"가 돼요.
+      const dim = t.state === "closed" ? 0.5 : t.state === "unknown" ? 0.8 : 1;
+      L.marker([t.lat, t.lng], {
+        icon: pinIcon(color, dim),
+        // 열린 핀이 겹쳤을 때 위로 오게.
+        zIndexOffset: t.state === "open" ? 1000 : 0,
+      })
         .on("click", () => selectRef.current(t))
         .addTo(layer);
     }
@@ -119,7 +138,11 @@ export function MapView({ me, toilets, radius, onSelect }: Props) {
             inset: 0,
             display: "grid",
             placeItems: "center",
-            background: "rgba(245,247,250,0.94)",
+            // 불투명해야 해요. 반투명이면 빈 지도 위로 핀이 비쳐서
+            // 안내인지 지도인지 알 수 없는 화면이 됩니다.
+            background: palette.bg,
+            // Leaflet 마커 pane 이 600 이라 그보다 위여야 안내가 가려지지 않아요.
+            zIndex: 1000,
             padding: 24,
           }}
         >
@@ -138,12 +161,13 @@ export function MapView({ me, toilets, radius, onSelect }: Props) {
  * 핀. Leaflet 기본 마커는 이미지 파일을 따로 물어서(번들 경로가 깨지기 쉬워요)
  * div 아이콘으로 직접 그립니다.
  */
-function pinIcon(color: string): L.DivIcon {
+function pinIcon(color: string, opacity = 1): L.DivIcon {
   return L.divIcon({
     className: "",
     html:
       `<div style="width:24px;height:24px;border-radius:50%;background:${color};` +
-      `border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35)"></div>`,
+      `border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35);` +
+      `opacity:${opacity}"></div>`,
     iconSize: [24, 24],
     iconAnchor: [12, 12],
   });

@@ -1,6 +1,6 @@
 import { formatDistance, walkMinutes } from "../lib/geo";
-import { hoursLabel } from "../lib/hours";
-import type { Toilet } from "../lib/toilets";
+import { hoursDetail } from "../lib/hours";
+import { KIND_LABEL, type Toilet } from "../lib/toilets";
 import { palette, stateStyle } from "../theme";
 
 /**
@@ -35,11 +35,23 @@ export function DetailSheet({ t, onClose, onGo }: {
           </div>
           <div style={{ fontSize: 18, fontWeight: 700, color: palette.ink }}>{t.name}</div>
           <div style={{ fontSize: 14, color: palette.sub, marginTop: 4 }}>
-            {hoursLabel(t.hours)} · {formatDistance(t.distance)} · 걸어서{" "}
-            {walkMinutes(t.distance)}분
+            {formatDistance(t.distance)} · 걸어서 {walkMinutes(t.distance)}분 ·{" "}
+            {KIND_LABEL[t.kind]}
           </div>
-          <div style={{ fontSize: 13, color: palette.sub, marginTop: 2 }}>
-            {t.kind === 0 ? "공중화장실" : "개방화장실 (공공시설)"}
+
+          {/* 평일과 주말이 다르면 둘 다 보여줘요. 오늘만 보여주면
+              "내일 가도 되나" 를 알 수 없어요. */}
+          <div style={{ marginTop: 8 }}>
+            {hoursDetail(t.hours).map(({ day, span }) => (
+              <div key={day} style={{ display: "flex", fontSize: 14, padding: "2px 0" }}>
+                {day !== "" && (
+                  <span style={{ width: 76, color: palette.sub }}>{day}</span>
+                )}
+                <span style={{ color: span === "휴무" ? palette.sub : palette.ink }}>
+                  {span}
+                </span>
+              </div>
+            ))}
           </div>
         </div>
 

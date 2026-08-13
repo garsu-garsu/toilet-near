@@ -66,50 +66,113 @@ function parseCsv(text) {
 
 const ALL_DAY = /24\s*시간|상시|연중|항상|24h/i;
 
+/** 평일만 여는 곳을 가리키는 표기. */
+const WEEKDAY = /평일|주중|월~금|월-금|월∼금/;
 /**
- * 자유 텍스트 개방시간 → "24" | "HHMM-HHMM" | ""
- *
- * 실제로 들어오는 값들:
- *   "24시간", "상시개방", "09:00 ~ 18:00", "09:00-18:00", "0900~1800",
- *   "하절기 05:00~22:00 동절기 06:00~21:00", "미개방", "", "-"
- *
- * 여러 구간이 적혀 있으면 첫 구간만 씁니다. 계절별 구분까지 다루면
- * 데이터 품질 대비 코드가 너무 무거워져요.
- * ponytail: 첫 구간만 채택. 계절별 분리가 필요하면 값을 배열로 늘리세요.
+ * 주말 구간이 따로 적혀 있는지.
+ * "(토)" 를 `토\)` 로 쓰면 "(평일)" 의 "일)" 에도 걸려요 — 여는 괄호까지 요구합니다.
  */
-export function normalizeHours(raw) {
-  const s = (raw ?? "").trim();
-  if (s === "" || s === "-") return "";
-  if (ALL_DAY.test(s)) return "24";
+const WEEKEND = /주말|토요|일요|\(토\)|\(일\)/;
+/** 그 구간이 "닫는다"는 뜻인지. */
+const CLOSED = /미개방|닫힘|휴무|없음|불가/;
 
-  const m = s.match(/(\d{1,2})\s*[:시]?\s*(\d{2})?\s*[~\-–]\s*(\d{1,2})\s*[:시]?\s*(\d{2})?/);
-  if (m == null) return "";
+const RANGE =
+  /(\d{1,2})\s*[:시]?\s*(\d{2})?\s*[~\-–∼]\s*(\d{1,2})\s*[:시]?\s*(\d{2})?/;
 
-  const pad = (h, mm) => {
-    const hh = Number(h);
-    const mi = Number(mm ?? "0");
-    if (!Number.isFinite(hh) || hh > 24 || mi > 59) return null;
-    // "24:00" 은 자정을 뜻해요. 0시로 접습니다.
-    return `${String(hh % 24).padStart(2, "0")}${String(mi).padStart(2, "0")}`;
-  };
+/** "9", "18" + "00" → "0900" / "1800". 말이 안 되면 null. */
+function pad(h, mm) {
+  const hh = Number(h);
+  const mi = Number(mm ?? "0");
+  if (!Number.isFinite(hh) || hh > 24 || mi > 59) return null;
+  // "24:00" 은 자정을 뜻해요. 0시로 접습니다.
+  return `${String(hh % 24).padStart(2, "0")}${String(mi).padStart(2, "0")}`;
+}
+
+/** 문자열에서 첫 시각 범위 하나를 뽑아 "HHMM-HHMM" 으로. 없으면 null. */
+function firstRange(s) {
+  const m = s.match(RANGE);
+  if (m == null) return null;
   const a = pad(m[1], m[2]);
   const b = pad(m[3], m[4]);
-  if (a == null || b == null) return "";
+  if (a == null || b == null) return null;
   // 00:00~24:00 처럼 하루를 통째로 적어둔 것도 24시간이에요.
   if (a === b) return "24";
   return `${a}-${b}`;
 }
 
+/**
+ * 자유 텍스트 개방시간 → "24" | "HHMM-HHMM" | "평일|주말" | ""
+ *
+ * 실제로 들어오는 값들(상위 빈도순):
+ *   "상시", "정시 09:00~18:00", "(평일)09:00~18:00",
+ *   "(평일)09:00-18:00+(주말)09:00-18:00", "평일,주말: 06:00~24:00",
+ *   "(평일)06:00-24:00+(주말)상시닫힘", "09:00~18:00 주말및공휴일 미개방",
+ *   "정시 9시간", "불규칙", "미개방", ""
+ *
+ * 평일 표기가 있으면 주말 구간을 따로 찾아서 "평일|주말" 로 담아요.
+ * 주말이 닫힘이거나 아예 안 적혀 있으면 주말 칸을 비웁니다.
+ *
+ * ponytail: 요일 축은 평일/주말 둘로만 나눠요. 요일마다 다른 곳은
+ *           데이터에 거의 없고, 있어도 평일 구간으로 읽힙니다.
+ */
+export function normalizeHours(raw) {
+  const s = (raw ?? "").trim();
+  if (s === "" || s === "-") return "";
+  // 요일을 전혀 안 가리고 종일 여는 곳.
+  if (ALL_DAY.test(s) && firstRange(s) == null) return "24";
+
+  // "+" 나 쉼표로 평일 구간과 주말 구간이 나뉘어 있는 경우가 많아요.
+  const parts = s.split(/[+,]/).map((p) => p.trim()).filter((p) => p !== "");
+  const weekendPart = parts.find((p) => WEEKEND.test(p));
+  // 평일 조각: 평일 표기가 있는 것 우선, 없으면 주말을 말하지 않는 조각.
+  const weekdayPart =
+    parts.find((p) => WEEKDAY.test(p)) ??
+    parts.find((p) => !WEEKEND.test(p)) ??
+    s;
+
+  let base = firstRange(weekdayPart) ?? "";
+  if (base === "" && ALL_DAY.test(weekdayPart)) base = "24";
+  if (base === "") {
+    // "평일,주말: 06:00~24:00" 처럼 시각이 주말 조각에만 붙어 있는 표기 —
+    // 두 요일이 같은 시간을 쓴다는 뜻이에요.
+    return weekendPart != null ? (firstRange(weekendPart) ?? "") : "";
+  }
+
+  if (weekendPart == null) {
+    // 주말 얘기가 아예 없어요. 평일이라고 적혀 있으면 평일만 여는 곳이고,
+    // 그런 말도 없으면 요일을 안 가리는 곳이에요.
+    return WEEKDAY.test(s) ? `${base}|` : base;
+  }
+  // "(주말)상시닫힘", "주말및공휴일 미개방" 처럼 닫는다고 적힌 경우.
+  if (CLOSED.test(weekendPart)) return `${base}|`;
+
+  const weekend = firstRange(weekendPart);
+  if (weekend == null) return base;
+  return base === weekend ? base : `${base}|${weekend}`;
+}
+
 /* ------------------------------- 지오코딩 --------------------------------- */
 
-const cache = existsSync(CACHE_FILE)
-  ? JSON.parse(readFileSync(CACHE_FILE, "utf8"))
-  : {};
+/**
+ * 캐시 키는 "타입:주소" 예요.
+ * 예전 캐시는 도로명으로만 조회해서 키에 타입이 없었어요 — 읽으면서 옮깁니다.
+ */
+function loadCache() {
+  if (!existsSync(CACHE_FILE)) return {};
+  const raw = JSON.parse(readFileSync(CACHE_FILE, "utf8"));
+  const out = {};
+  for (const [k, v] of Object.entries(raw)) {
+    out[k.includes(":") ? k : `ROAD:${k}`] = v;
+  }
+  return out;
+}
+
+const cache = loadCache();
 
 let sinceSave = 0;
-function remember(addr, value) {
-  cache[addr] = value;
-  if (++sinceSave >= 200) {
+function remember(cacheKey, value) {
+  cache[cacheKey] = value;
+  if (++sinceSave >= 300) {
     writeFileSync(CACHE_FILE, JSON.stringify(cache));
     sinceSave = 0;
   }
@@ -117,37 +180,117 @@ function remember(addr, value) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** VWorld 지오코더. 실패하면 null — 그 줄은 버립니다. */
-async function geocode(addr, key) {
-  if (addr in cache) return cache[addr];
+/**
+ * VWorld 지오코더 한 번 호출.
+ * @param type ROAD(도로명) 또는 PARCEL(지번)
+ */
+async function geocodeOne(addr, type, key) {
+  const cacheKey = `${type}:${addr}`;
+  if (cacheKey in cache) return cache[cacheKey];
 
   const url =
     "https://api.vworld.kr/req/address?service=address&request=getcoord" +
-    `&version=2.0&crs=EPSG:4326&type=ROAD&format=json&key=${key}` +
+    `&version=2.0&crs=EPSG:4326&type=${type}&format=json&key=${key}` +
     `&address=${encodeURIComponent(addr)}`;
 
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < 4; attempt++) {
     try {
       const res = await fetch(url);
-      const json = await res.json();
-      if (json?.response?.status === "OK") {
-        const p = json.response.result.point;
-        const v = [Number(p.y), Number(p.x)]; // [위도, 경도]
-        remember(addr, v);
-        return v;
+      const text = await res.text();
+
+      if (text.startsWith("{")) {
+        const json = JSON.parse(text);
+        if (json?.response?.status === "OK") {
+          const p = json.response.result.point;
+          const v = [Number(p.y), Number(p.x)]; // [위도, 경도]
+          consecutiveServerErrors = 0;
+          remember(cacheKey, v);
+          return v;
+        }
+        // 주소가 없는 건 다시 물어도 없어요. 이건 캐시해도 됩니다.
+        if (json?.response?.status === "NOT_FOUND") {
+          consecutiveServerErrors = 0;
+          remember(cacheKey, null);
+          return null;
+        }
       }
-      // NOT_FOUND 는 재시도해도 같아요. 바로 포기합니다.
-      if (json?.response?.status === "NOT_FOUND") {
-        remember(addr, null);
-        return null;
-      }
+      // JSON 이 아니면 502 같은 서버 오류거나 주소 형식이 깨진 거예요.
+      // 둘을 구분할 수 없어서 캐시하지 않고 재시도합니다.
     } catch {
-      /* 네트워크는 재시도 */
+      /* 소켓이 끊기는 일이 잦아요. 재시도합니다. */
     }
-    await sleep(300 * (attempt + 1));
+    await sleep(700 * (attempt + 1));
   }
-  remember(addr, null);
+
+  /*
+   * 여기까지 왔으면 서버가 계속 안 받아준 거예요.
+   * 캐시에 실패로 남기면 안 됩니다 — 일시적인 장애가 영구 실패로 굳어서,
+   * 다시 돌려도 그 주소는 영영 안 찍혀요. 실제로 그래서 성공률이 50% 였습니다.
+   *
+   * 이게 연달아 나면 하루 4만 건 한도를 쓴 거예요. 계속 두들겨봐야
+   * 시간만 버리고 차단만 길어지니 배치를 접습니다. 내일 이어서 돌리면 돼요.
+   */
+  if (++consecutiveServerErrors >= 20) throw new QuotaExhausted();
   return null;
+}
+
+/**
+ * 주소를 다듬어요. 호출 한도가 하루 4만 건이라 한 번에 맞히는 게 중요해요.
+ *
+ * - 쉼표 뒤 상세주소("3층 동편계단")를 떼요. 붙어 있으면 못 찾아요.
+ * - "청계천로307" 처럼 도로명과 번호가 붙어 있으면 띄어써요.
+ */
+export function cleanAddress(a) {
+  return (a ?? "")
+    .split(",")[0]
+    .replace(/([가-힣]+(?:대?로|길))(\d)/g, "$1 $2")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** 서버가 연달아 죽으면 하루 한도에 걸린 거예요. 그때 세는 값. */
+let consecutiveServerErrors = 0;
+export class QuotaExhausted extends Error {}
+
+/**
+ * 도로명 → 지번 순으로 시도해요.
+ *
+ * 이 데이터는 지번주소만 있는 줄이 5천 건 넘는데, 지번을 도로명 파서에 넣으면
+ * 전부 NOT_FOUND 로 떨어져요. 실제로 그래서 성공률이 61% 였어요.
+ */
+async function geocode(road, jibun, key) {
+  const r = cleanAddress(road);
+  if (r !== "") {
+    const v = await geocodeOne(r, "ROAD", key);
+    if (v != null) return v;
+  }
+  const j = cleanAddress(jibun);
+  // 도로명과 지번이 같으면 두 번 부를 이유가 없어요.
+  if (j !== "" && j !== r) {
+    const v = await geocodeOne(j, "PARCEL", key);
+    if (v != null) return v;
+  }
+  return null;
+}
+
+/**
+ * 동시에 몇 개씩 부를지.
+ * 6 으로 올렸더니 VWorld 가 502 를 뱉기 시작했고, 같은 키를 쓰는 지도 타일까지
+ * 함께 막혔어요. 배치는 급할 게 없으니 서버가 버티는 선에서 돌립니다.
+ */
+const CONCURRENCY = 3;
+
+/** 순서를 지키면서 동시에 여러 개를 처리해요. */
+async function mapLimit(items, limit, fn) {
+  let next = 0;
+  const workers = Array.from({ length: limit }, async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      await fn(items[i], i);
+    }
+  });
+  await Promise.all(workers);
 }
 
 /* -------------------------------- 오픈API -------------------------------- */
@@ -233,15 +376,33 @@ function pick(header, ...names) {
   return -1;
 }
 
-/** CSV 를 오픈API 와 같은 모양으로 폅니다. 아래 루프는 출처를 몰라도 되게. */
+/**
+ * CSV 를 오픈API 와 같은 모양으로 폅니다. 아래 루프는 출처를 몰라도 되게.
+ *
+ * localdata.go.kr 의 공중화장실정보 CSV 는 cp949 이고 좌표 칸이 아예 없어요.
+ * 개방시간이 두 칸으로 나뉘어 있는 것도 함정이에요:
+ *   개방시간구분 = "상시" | "주간" | "기타"
+ *   개방시간상세 = "10:30-20:30" | "9시간" | ""
+ * "9시간" 은 시각 범위가 아니라 길이라서 그것만 보면 못 읽어요.
+ * 두 칸을 붙여 넘기면 "상시"는 24시간으로, 범위가 적힌 것만 범위로 읽힙니다.
+ */
 function readCsv(csvPath) {
-  const rows = parseCsv(readFileSync(csvPath, "utf8"));
-  const header = rows[0].map((h) => h.trim());
+  const buf = readFileSync(csvPath);
+  // BOM 이 있으면 UTF-8, 없으면 cp949 로 봅니다.
+  const isUtf8 = buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf;
+  const text = new TextDecoder(isUtf8 ? "utf-8" : "euc-kr").decode(buf);
+  console.log(`  인코딩: ${isUtf8 ? "UTF-8" : "cp949"}`);
+
+  const rows = parseCsv(text);
+  const header = rows[0].map((h) => h.trim().replace(/^﻿/, ""));
   const iName = pick(header, "화장실명");
   const iRoad = pick(header, "소재지도로명주소");
   const iJibun = pick(header, "소재지지번주소");
-  const iHours = pick(header, "개방시간", "개방시간상세");
-  const iKind = pick(header, "구분");
+  // 이름이 헷갈려요. "개방시간" 이 구분(정시/상시/미개방)이고,
+  // 실제 시각은 "개방시간상세" 에 있어요.
+  const iHourKind = pick(header, "개방시간", "개방시간구분");
+  const iHourDetail = pick(header, "개방시간상세");
+  const iKind = pick(header, "구분명", "구분");
   const iLat = pick(header, "위도", "WGS84위도");
   const iLng = pick(header, "경도", "WGS84경도");
 
@@ -254,11 +415,13 @@ function readCsv(csvPath) {
   for (let i = 1; i < rows.length; i++) {
     const r = rows[i];
     if (r.length < header.length - 2) continue;
+    const hourKind = iHourKind >= 0 ? (r[iHourKind] ?? "") : "";
+    const hourDetail = iHourDetail >= 0 ? (r[iHourDetail] ?? "") : "";
     out.push({
       name: (r[iName] ?? "").trim(),
       road: (r[iRoad] ?? "").trim(),
       jibun: (r[iJibun] ?? "").trim(),
-      hours: r[iHours] ?? "",
+      hours: `${hourKind} ${hourDetail}`.trim(),
       kind: r[iKind] ?? "",
       lat: iLat >= 0 ? Number(r[iLat]) : NaN,
       lng: iLng >= 0 ? Number(r[iLng]) : NaN,
@@ -282,29 +445,57 @@ async function main() {
   const records = csvPath != null ? readCsv(csvPath) : await fetchFromApi(dataKey);
   console.log(`원본 ${records.length}건`);
 
-  const cells = new Map();
-  let geocoded = 0;
-  let dropped = 0;
+  // 1) 쓸 줄만 남겨요.
+  let excluded = 0;
+  const keep = records.filter((rec) => {
+    if (rec.name === "") return false;
+    // 미개방으로 적힌 곳은 아예 빼요. "시간 정보 없음" 으로 두면
+    // 목록에서 열린 곳 바로 아래에 올라와 헛걸음을 시킵니다.
+    if (String(rec.hours).includes("미개방")) { excluded++; return false; }
+    // 이동화장실은 행사용 임시 설치라 주소로 찍은 좌표를 믿을 수 없어요.
+    if (String(rec.kind).includes("이동")) { excluded++; return false; }
+    return true;
+  });
 
-  for (const rec of records) {
-    if (rec.name === "") continue;
-
-    let { lat, lng } = rec;
-
-    // 2025년 2월 이후 데이터에는 좌표 칸이 비어 있어요.
-    if (!isKoreaCoord(lat, lng)) {
-      const addr = rec.road !== "" ? rec.road : rec.jibun;
-      if (addr === "" || key == null) { dropped++; continue; }
-      const got = await geocode(addr, key);
-      if (got == null) { dropped++; continue; }
-      [lat, lng] = got;
-      if (!isKoreaCoord(lat, lng)) { dropped++; continue; }
-      if (++geocoded % 500 === 0) console.log(`  지오코딩 ${geocoded}건…`);
+  // 2) 좌표가 없는 줄을 병렬로 찍어요. 한 건씩 순서대로 부르면 몇 시간 걸려요.
+  const needGeo = keep.filter((r) => !isKoreaCoord(r.lat, r.lng));
+  if (needGeo.length > 0 && key != null) {
+    console.log(`좌표 찍을 줄 ${needGeo.length}건 (동시 ${CONCURRENCY}개)`);
+    let done = 0;
+    try {
+      await mapLimit(needGeo, CONCURRENCY, async (rec) => {
+        const got = await geocode(rec.road, rec.jibun, key);
+        if (got != null) [rec.lat, rec.lng] = got;
+        if (++done % 1000 === 0) {
+          const hit = keep.filter((r) => isKoreaCoord(r.lat, r.lng)).length;
+          console.log(`  ${done}/${needGeo.length}  (좌표 확보 ${hit}건)`);
+        }
+      });
+    } catch (e) {
+      if (!(e instanceof QuotaExhausted)) throw e;
+      console.warn(
+        `
+하루 호출 한도를 쓴 것 같아요 (${done}/${needGeo.length} 까지 진행).
+` +
+        `찍어둔 좌표는 캐시에 남아 있어요. 내일 같은 명령을 다시 치면 이어서 갑니다.
+` +
+        `지금까지 확보한 만큼으로 격자를 만들어 둘게요.`,
+      );
     }
+    writeFileSync(CACHE_FILE, JSON.stringify(cache));
+  }
+
+  // 3) 격자에 담아요.
+  const cells = new Map();
+  let dropped = 0;
+  for (const rec of keep) {
+    const { lat, lng } = rec;
+    if (!isKoreaCoord(lat, lng)) { dropped++; continue; }
 
     const hours = normalizeHours(rec.hours);
-    // 구분이 공중화장실이 아니면 개방화장실(관공서 등)로 봅니다.
-    const kind = String(rec.kind).includes("공중") ? 0 : 1;
+    // 0 = 공중화장실, 1 = 개방화장실(민간·공공이 열어준 곳), 2 = 간이화장실
+    const k2 = String(rec.kind);
+    const kind = k2.includes("공중") ? 0 : k2.includes("간이") ? 2 : 1;
 
     const k = `${Math.floor(lat / CELL)}_${Math.floor(lng / CELL)}`;
     if (!cells.has(k)) cells.set(k, []);
@@ -322,6 +513,7 @@ async function main() {
   }
 
   console.log(`화장실 ${total}건 / 격자 ${cells.size}칸 저장`);
+  console.log(`제외 ${excluded}건 (미개방·이동화장실)`);
   console.log(`버린 줄 ${dropped}건 (주소 없음 또는 좌표 못 찾음)`);
   if (key == null) {
     console.warn("VWORLD_KEY 가 없어서 좌표 없는 줄은 전부 버렸어요.");
@@ -362,24 +554,62 @@ async function probe() {
   }
 }
 
-/* 자체 점검 — 개방시간 정규화가 이 앱의 유일한 진짜 로직이에요. */
+/* 자체 점검 — 개방시간 정규화가 이 앱의 유일한 진짜 로직이에요.
+   아래 값들은 전부 실제 CSV 에서 그대로 가져온 문자열입니다. */
 export function demo() {
   const eq = (got, want) => {
-    if (got !== want) throw new Error(`${got} !== ${want}`);
+    if (got !== want) throw new Error(`${JSON.stringify(got)} !== ${JSON.stringify(want)}`);
   };
+
+  // 요일을 안 가리는 값
+  eq(normalizeHours("상시"), "24");
+  eq(normalizeHours("상시 9시간"), "24");
   eq(normalizeHours("24시간"), "24");
-  eq(normalizeHours("상시개방"), "24");
   eq(normalizeHours("연중무휴"), "24");
+  eq(normalizeHours("정시 09:00~18:00"), "0900-1800");
+  eq(normalizeHours("정시 09:00-18:00"), "0900-1800");
+  eq(normalizeHours("정시 9시간"), "");
+  eq(normalizeHours("불규칙"), "");
+  eq(normalizeHours("정시"), "");
   eq(normalizeHours(""), "");
   eq(normalizeHours("-"), "");
-  eq(normalizeHours("미개방"), "");
-  eq(normalizeHours("09:00 ~ 18:00"), "0900-1800");
-  eq(normalizeHours("09:00-18:00"), "0900-1800");
-  eq(normalizeHours("9시~18시"), "0900-1800");
-  eq(normalizeHours("0530~2230"), "0530-2230");
-  eq(normalizeHours("하절기 05:00~22:00 동절기 06:00~21:00"), "0500-2200");
-  eq(normalizeHours("00:00~24:00"), "24");
-  eq(normalizeHours("22:00~04:00"), "2200-0400");
+  eq(normalizeHours("정시 00:00~24:00"), "24");
+  eq(normalizeHours("정시 22:00~04:00"), "2200-0400");
+  eq(normalizeHours("정시 10:30-20:30"), "1030-2030");
+
+  // 평일만 여는 곳 — 주말 칸을 비워요
+  eq(normalizeHours("정시 (평일)09:00~18:00"), "0900-1800|");
+  eq(normalizeHours("정시 (평일)09:00-18:00"), "0900-1800|");
+  eq(normalizeHours("정시 월~금 09시~18시"), "0900-1800|");
+  eq(normalizeHours("정시 평일 09:00~18:00"), "0900-1800|");
+  eq(normalizeHours("정시 평일(09:00~18:00)"), "0900-1800|");
+  eq(normalizeHours("정시 09:00~18:00(평일)"), "0900-1800|");
+  eq(normalizeHours("정시 (월~금)09:00~18:00"), "0900-1800|");
+  eq(normalizeHours("정시 월~금 09~18시"), "0900-1800|");
+
+  // 주말이 닫힌다고 적힌 경우도 평일만
+  // 24:00 은 자정이라 "0000" 으로 접어요. "2400" 으로 두면 앱에서 못 읽어요.
+  eq(normalizeHours("정시 (평일)06:00-24:00+(주말)상시닫힘"), "0600-0000|");
+  eq(normalizeHours("정시 09:00~18:00 주말및공휴일 미개방"), "0900-1800|");
+  eq(normalizeHours("정시 (평일)09:00-18:00+공휴일, 국경일 미개방"), "0900-1800|");
+
+  // 주말도 같은 시간이면 요일을 안 가리는 것과 같아요
+  eq(normalizeHours("정시 (평일)09:00-18:00+(주말)09:00-18:00"), "0900-1800");
+  eq(normalizeHours("정시 (평일)09:00~18:00+(주말)09:00~18:00"), "0900-1800");
+  eq(normalizeHours("정시 평일,주말: 06:00~24:00"), "0600-0000");
+  eq(normalizeHours("정시 (평일)06:00-21:00+(주말)06:00-21:00"), "0600-2100");
+
+  // 주말 시간이 다르면 둘 다 담아요
+  eq(normalizeHours("정시 (평일)09:00~20:00+(주말)09:00~18:00"), "0900-2000|0900-1800");
+  eq(normalizeHours("정시 (평일)09:00-22:00+(주말)09:00-22:00"), "0900-2200");
+
+  // 주소 다듬기 — 호출 한도가 빠듯해서 한 번에 맞히는 게 중요해요.
+  eq(cleanAddress("서울특별시 종로구 청계천로307, 3층 동편계단"), "서울특별시 종로구 청계천로 307");
+  eq(cleanAddress("서울특별시 종로구 세종대로 110"), "서울특별시 종로구 세종대로 110");
+  eq(cleanAddress("경기도 성남시 분당구 판교역로235"), "경기도 성남시 분당구 판교역로 235");
+  eq(cleanAddress("서울특별시 종로구 삼청동  산2-1 "), "서울특별시 종로구 삼청동 산2-1");
+  eq(cleanAddress(""), "");
+
   console.log("build-toilets normalizeHours OK");
 }
 

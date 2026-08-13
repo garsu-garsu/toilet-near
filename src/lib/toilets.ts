@@ -4,16 +4,23 @@ import { openState, type OpenState } from "./hours";
 /**
  * 격자 파일 한 줄. 6만 건을 담아야 해서 객체 대신 배열로 눌러 놨어요.
  * [위도, 경도, 이름, 개방시간, 종류]
- * 종류 0 = 공중화장실, 1 = 개방화장실(관공서·공공시설)
  */
-export type Row = [number, number, string, string, 0 | 1];
+export type Kind = 0 | 1 | 2;
+export type Row = [number, number, string, string, Kind];
+
+/** 개방화장실은 민간 건물도 포함해요 — 관공서만 뜻하지 않습니다. */
+export const KIND_LABEL: Record<Kind, string> = {
+  0: "공중화장실",
+  1: "개방화장실",
+  2: "간이화장실",
+};
 
 export interface Toilet {
   lat: number;
   lng: number;
   name: string;
   hours: string;
-  kind: 0 | 1;
+  kind: Kind;
   distance: number;
   state: OpenState;
 }
