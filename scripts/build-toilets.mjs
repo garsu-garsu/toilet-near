@@ -194,6 +194,9 @@ async function geocodeOne(addr, type, key) {
     `&address=${encodeURIComponent(addr)}`;
 
   for (let attempt = 0; attempt < 4; attempt++) {
+    // 다른 워커가 서버 오류를 만났으면 같이 쉬어요. 혼자만 계속 두들기면
+    // 제한이 안 풀립니다.
+    await waitCooldown();
     try {
       const res = await fetch(url);
       const text = await res.text();
@@ -219,6 +222,8 @@ async function geocodeOne(addr, type, key) {
     } catch {
       /* 소켓이 끊기는 일이 잦아요. 재시도합니다. */
     }
+    // 서버가 밀어냈으니 모두 함께 쉬어요.
+    cooldownUntil = Date.now() + COOLDOWN_MS;
     await sleep(700 * (attempt + 1));
   }
 
@@ -230,7 +235,7 @@ async function geocodeOne(addr, type, key) {
    * 이게 연달아 나면 하루 4만 건 한도를 쓴 거예요. 계속 두들겨봐야
    * 시간만 버리고 차단만 길어지니 배치를 접습니다. 내일 이어서 돌리면 돼요.
    */
-  if (++consecutiveServerErrors >= 20) throw new QuotaExhausted();
+  if (++consecutiveServerErrors >= GIVE_UP_AFTER) throw new QuotaExhausted();
   return null;
 }
 
@@ -248,9 +253,25 @@ export function cleanAddress(a) {
     .trim();
 }
 
-/** 서버가 연달아 죽으면 하루 한도에 걸린 거예요. 그때 세는 값. */
+/**
+ * VWorld 는 하루 한도(4만) 말고 순간 부하 제한도 걸어요.
+ * 몰아치면 502 를 뱉다가 잠시 쉬면 다시 받아줍니다.
+ *
+ * 그래서 서버 오류가 나면 바로 접지 말고 모든 워커를 함께 재웠다가 이어가요.
+ * 쉬어도 계속 안 되면 그때가 진짜 하루 한도예요.
+ */
+let cooldownUntil = 0;
 let consecutiveServerErrors = 0;
 export class QuotaExhausted extends Error {}
+
+const COOLDOWN_MS = 30_000;
+/** 쉬어도 이만큼 연달아 실패하면 하루치를 다 쓴 거예요. */
+const GIVE_UP_AFTER = 40;
+
+async function waitCooldown() {
+  const left = cooldownUntil - Date.now();
+  if (left > 0) await sleep(left);
+}
 
 /**
  * 도로명 → 지번 순으로 시도해요.
@@ -278,7 +299,7 @@ async function geocode(road, jibun, key) {
  * 6 으로 올렸더니 VWorld 가 502 를 뱉기 시작했고, 같은 키를 쓰는 지도 타일까지
  * 함께 막혔어요. 배치는 급할 게 없으니 서버가 버티는 선에서 돌립니다.
  */
-const CONCURRENCY = 3;
+const CONCURRENCY = 2;
 
 /** 순서를 지키면서 동시에 여러 개를 처리해요. */
 async function mapLimit(items, limit, fn) {
@@ -460,7 +481,10 @@ async function main() {
   // 2) 좌표가 없는 줄을 병렬로 찍어요. 한 건씩 순서대로 부르면 몇 시간 걸려요.
   const needGeo = keep.filter((r) => !isKoreaCoord(r.lat, r.lng));
   if (needGeo.length > 0 && key != null) {
-    console.log(`좌표 찍을 줄 ${needGeo.length}건 (동시 ${CONCURRENCY}개)`);
+    const already = needGeo.filter((r) => isKoreaCoord(r.lat, r.lng)).length;
+    console.log(
+      `좌표 찍을 줄 ${needGeo.length}건 (동시 ${CONCURRENCY}개, 이미 확보 ${already}건)`,
+    );
     let done = 0;
     try {
       await mapLimit(needGeo, CONCURRENCY, async (rec) => {
