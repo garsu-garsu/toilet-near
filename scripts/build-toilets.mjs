@@ -1,10 +1,17 @@
 /**
  * 공중화장실 원장 만들기 (1회성 배치)
  *
- *   node scripts/build-toilets.mjs data/전국공중화장실표준데이터.csv
+ *   # 권장 — 오픈API로 직접 받아요. 수동 다운로드가 필요 없어요.
+ *   DATA_KEY=공공데이터포털키 VWORLD_KEY=브이월드키 node scripts/build-toilets.mjs
+ *
+ *   # API 응답 필드부터 확인하고 싶을 때
+ *   DATA_KEY=공공데이터포털키 node scripts/build-toilets.mjs --probe
+ *
+ *   # 이미 받아둔 CSV 가 있으면
+ *   VWORLD_KEY=브이월드키 node scripts/build-toilets.mjs data/toilets.csv
  *
  * 하는 일
- *   1. CSV 읽기
+ *   1. 오픈API(또는 CSV)에서 화장실 목록 읽기
  *   2. 좌표가 없으면 도로명주소로 지오코딩 (VWorld)
  *   3. 개방시간을 "24" / "0900-1800" / "" 셋 중 하나로 줄이기
  *   4. 0.05도 격자로 쪼개 public/data/cells/{y}_{x}.json 로 저장
@@ -143,6 +150,78 @@ async function geocode(addr, key) {
   return null;
 }
 
+/* -------------------------------- 오픈API -------------------------------- */
+
+const API_URL = "http://api.data.go.kr/openapi/tn_pubr_public_toilet_api";
+
+/**
+ * 표준데이터 오픈API 응답 필드.
+ * --probe 출력과 다르면 여기만 고치세요. 파싱은 전부 이 표를 거칩니다.
+ */
+const API_FIELD = {
+  name: "toiletNm",
+  road: "rdnmadr",
+  jibun: "lnmadr",
+  hours: "openTime",
+  kind: "toiletSeNm",
+  lat: "latitude",
+  lng: "longitude",
+};
+
+/** 응답 안 어디에 배열이 들어 있든 찾아내요. 래핑 형태가 오퍼레이션마다 달라요. */
+function firstArray(obj) {
+  if (Array.isArray(obj)) return obj;
+  if (obj == null || typeof obj !== "object") return null;
+  for (const v of Object.values(obj)) {
+    const found = firstArray(v);
+    if (found != null) return found;
+  }
+  return null;
+}
+
+async function apiPage(key, page, perPage) {
+  const url =
+    `${API_URL}?serviceKey=${key}&pageNo=${page}&numOfRows=${perPage}&type=json`;
+  const res = await fetch(url);
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    // 키가 안 맞으면 JSON 대신 XML 오류가 와요.
+    throw new Error(`JSON이 아니에요: ${text.slice(0, 200)}`);
+  }
+}
+
+/** 오픈API를 끝까지 훑어 표준 모양의 줄 배열로 돌려줘요. */
+async function fetchFromApi(key) {
+  const perPage = 1000;
+  const out = [];
+  let page = 1;
+  let total = Infinity;
+
+  while (out.length < total) {
+    const json = await apiPage(key, page, perPage);
+    const items = firstArray(json) ?? [];
+    if (page === 1) {
+      total = Number(json?.response?.body?.totalCount ?? json?.totalCount ?? items.length);
+    }
+    if (items.length === 0) break;
+    out.push(...items);
+    console.log(`  받는 중 ${out.length}/${total}`);
+    page++;
+    await sleep(120);
+  }
+  return out.map((it) => ({
+    name: String(it[API_FIELD.name] ?? "").trim(),
+    road: String(it[API_FIELD.road] ?? "").trim(),
+    jibun: String(it[API_FIELD.jibun] ?? "").trim(),
+    hours: String(it[API_FIELD.hours] ?? ""),
+    kind: String(it[API_FIELD.kind] ?? ""),
+    lat: Number(it[API_FIELD.lat]),
+    lng: Number(it[API_FIELD.lng]),
+  }));
+}
+
 /* --------------------------------- main ---------------------------------- */
 
 /** 헤더 이름이 연도마다 조금씩 달라서 후보를 여러 개 둡니다. */
@@ -154,15 +233,8 @@ function pick(header, ...names) {
   return -1;
 }
 
-async function main() {
-  const csvPath = process.argv[2];
-  if (csvPath == null) {
-    console.error("사용법: node scripts/build-toilets.mjs <csv경로>");
-    console.error("데이터: https://www.data.go.kr/data/15012892/standard.do");
-    process.exit(1);
-  }
-  const key = process.env.VWORLD_KEY;
-
+/** CSV 를 오픈API 와 같은 모양으로 폅니다. 아래 루프는 출처를 몰라도 되게. */
+function readCsv(csvPath) {
   const rows = parseCsv(readFileSync(csvPath, "utf8"));
   const header = rows[0].map((h) => h.trim());
   const iName = pick(header, "화장실명");
@@ -178,23 +250,50 @@ async function main() {
     process.exit(1);
   }
 
+  const out = [];
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    if (r.length < header.length - 2) continue;
+    out.push({
+      name: (r[iName] ?? "").trim(),
+      road: (r[iRoad] ?? "").trim(),
+      jibun: (r[iJibun] ?? "").trim(),
+      hours: r[iHours] ?? "",
+      kind: r[iKind] ?? "",
+      lat: iLat >= 0 ? Number(r[iLat]) : NaN,
+      lng: iLng >= 0 ? Number(r[iLng]) : NaN,
+    });
+  }
+  return out;
+}
+
+async function main() {
+  const csvPath = process.argv[2];
+  const dataKey = process.env.DATA_KEY;
+  const key = process.env.VWORLD_KEY;
+
+  if (csvPath == null && dataKey == null) {
+    console.error("DATA_KEY(공공데이터포털) 를 넣거나 CSV 경로를 주세요.");
+    console.error("데이터: https://www.data.go.kr/data/15012892/standard.do");
+    process.exit(1);
+  }
+
+  console.log(csvPath != null ? `CSV 읽는 중: ${csvPath}` : "오픈API 에서 받는 중…");
+  const records = csvPath != null ? readCsv(csvPath) : await fetchFromApi(dataKey);
+  console.log(`원본 ${records.length}건`);
+
   const cells = new Map();
   let geocoded = 0;
   let dropped = 0;
 
-  for (let i = 1; i < rows.length; i++) {
-    const r = rows[i];
-    if (r.length < header.length - 2) continue;
+  for (const rec of records) {
+    if (rec.name === "") continue;
 
-    const name = (r[iName] ?? "").trim();
-    if (name === "") continue;
-
-    let lat = iLat >= 0 ? Number(r[iLat]) : NaN;
-    let lng = iLng >= 0 ? Number(r[iLng]) : NaN;
+    let { lat, lng } = rec;
 
     // 2025년 2월 이후 데이터에는 좌표 칸이 비어 있어요.
     if (!isKoreaCoord(lat, lng)) {
-      const addr = (r[iRoad] ?? "").trim() || (r[iJibun] ?? "").trim();
+      const addr = rec.road !== "" ? rec.road : rec.jibun;
       if (addr === "" || key == null) { dropped++; continue; }
       const got = await geocode(addr, key);
       if (got == null) { dropped++; continue; }
@@ -203,13 +302,13 @@ async function main() {
       if (++geocoded % 500 === 0) console.log(`  지오코딩 ${geocoded}건…`);
     }
 
-    const hours = normalizeHours(r[iHours] ?? "");
-    // "구분" 이 공중화장실이 아니면 개방화장실(관공서 등)로 봅니다.
-    const kind = (r[iKind] ?? "").includes("공중") ? 0 : 1;
+    const hours = normalizeHours(rec.hours);
+    // 구분이 공중화장실이 아니면 개방화장실(관공서 등)로 봅니다.
+    const kind = String(rec.kind).includes("공중") ? 0 : 1;
 
     const k = `${Math.floor(lat / CELL)}_${Math.floor(lng / CELL)}`;
     if (!cells.has(k)) cells.set(k, []);
-    cells.get(k).push([round6(lat), round6(lng), name, hours, kind]);
+    cells.get(k).push([round6(lat), round6(lng), rec.name, hours, kind]);
   }
 
   writeFileSync(CACHE_FILE, JSON.stringify(cache));
@@ -239,6 +338,30 @@ function isKoreaCoord(lat, lng) {
 
 const round6 = (n) => Math.round(n * 1e6) / 1e6;
 
+/** 오픈API 응답을 눈으로 확인해요. 필드명이 다르면 API_FIELD 만 고치면 됩니다. */
+async function probe() {
+  const dataKey = process.env.DATA_KEY;
+  if (dataKey == null) {
+    console.error("DATA_KEY 가 필요해요.");
+    process.exit(1);
+  }
+  const json = await apiPage(dataKey, 1, 2);
+  const items = firstArray(json) ?? [];
+  console.log("총건수:", json?.response?.body?.totalCount ?? json?.totalCount);
+  console.log(JSON.stringify(items[0], null, 2));
+  if (items[0] != null) {
+    console.log("\n현재 표로 읽으면:");
+    console.log({
+      name: items[0][API_FIELD.name],
+      road: items[0][API_FIELD.road],
+      hours: items[0][API_FIELD.hours],
+      normalized: normalizeHours(items[0][API_FIELD.hours] ?? ""),
+      lat: items[0][API_FIELD.lat],
+      lng: items[0][API_FIELD.lng],
+    });
+  }
+}
+
 /* 자체 점검 — 개방시간 정규화가 이 앱의 유일한 진짜 로직이에요. */
 export function demo() {
   const eq = (got, want) => {
@@ -261,4 +384,5 @@ export function demo() {
 }
 
 if (process.argv[2] === "--check") demo();
+else if (process.argv[2] === "--probe") probe();
 else if (process.argv[1]?.endsWith("build-toilets.mjs")) main();

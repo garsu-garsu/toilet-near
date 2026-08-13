@@ -26,6 +26,33 @@ type Phase =
 
 type Tab = "map" | "list";
 
+/**
+ * 지금 내 위치.
+ *
+ * 토스 앱 안에서는 Device.getLocation 을 씁니다. accuracy 를 최고로 올리면
+ * 실내에서 GPS 를 붙잡느라 몇 초씩 걸려서, 수십 미터면 충분한 이 앱은
+ * Balanced(3) 로 받아요.
+ *
+ * 웹 브라우저로 열면 토스 브릿지가 없어요. 그때는 표준 geolocation 으로
+ * 넘어갑니다 — 다만 권한을 거부당한 경우에는 원래 오류를 그대로 올려야
+ * 위쪽에서 "권한 거부" 화면을 띄울 수 있어요.
+ */
+async function currentPosition(): Promise<LatLng> {
+  try {
+    const loc = await Device.getLocation({ accuracy: 3 });
+    return { lat: loc.coords.latitude, lng: loc.coords.longitude };
+  } catch (bridgeError) {
+    if (navigator.geolocation == null) throw bridgeError;
+    return new Promise((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(
+        (p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude }),
+        () => reject(bridgeError),
+        { enableHighAccuracy: false, timeout: 8000 },
+      );
+    });
+  }
+}
+
 export function HomeScreen() {
   const [phase, setPhase] = useState<Phase>({ k: "locating" });
   const [tab, setTab] = useState<Tab>("map");
@@ -35,10 +62,7 @@ export function HomeScreen() {
   const locate = useCallback(async () => {
     setPhase({ k: "locating" });
     try {
-      // accuracy 를 최고로 올리면 실내에서 GPS 를 붙잡느라 몇 초씩 걸려요.
-      // 수십 미터면 충분한 앱이라 Balanced(3) 로 받습니다.
-      const loc = await Device.getLocation({ accuracy: 3 });
-      const me = { lat: loc.coords.latitude, lng: loc.coords.longitude };
+      const me = await currentPosition();
       track(EVENT.locationGranted);
       const all = await findNearby(me);
       track(EVENT.nearbyFound, { count: all.length });
