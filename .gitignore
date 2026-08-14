@@ -3,5 +3,9 @@ dist
 *.ait
 .env
 scripts/.geocache.json
-data/
 screenshots/
+
+# 원본 CSV(16MB)와 작업 기록만 빼요. 맨 앞 슬래시가 없으면 public/data 까지
+# 같이 걸려서, 격자 파일이 깃에 안 올라갑니다 — 그건 앱의 데이터 그 자체이고
+# 지오코딩 한도를 이틀 써서 만든 거라 반드시 남겨야 해요.
+/data/
