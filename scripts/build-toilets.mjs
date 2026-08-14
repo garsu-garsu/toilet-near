@@ -188,6 +188,14 @@ async function geocodeOne(addr, type, key) {
   const cacheKey = `${type}:${addr}`;
   if (cacheKey in cache) return cache[cacheKey];
 
+  /*
+   * 한도를 다 썼으면 네트워크는 그만 두드리되, 배치는 계속 돌려야 해요.
+   * 여기서 배치를 통째로 접으면 뒤에 남은 줄들이 캐시에 이미 있어도 같이
+   * 버려집니다 — 그래서 어제 37,284 에서 멈췄고, 격자가 실제 확보량보다
+   * 작게 나왔어요. 캐시에 없는 주소만 포기하고 나머지는 그대로 통과시킵니다.
+   */
+  if (quotaExhausted) return null;
+
   const url =
     "https://api.vworld.kr/req/address?service=address&request=getcoord" +
     `&version=2.0&crs=EPSG:4326&type=${type}&format=json&key=${key}` +
@@ -216,6 +224,16 @@ async function geocodeOne(addr, type, key) {
           remember(cacheKey, null);
           return null;
         }
+        /*
+         * 한도를 다 쓰면 VWorld 가 이걸로 답해요. 재시도는 무의미합니다 —
+         * 내일이 되기 전에는 절대 안 풀려요. 그런데 이걸 502 같은 일시 장애와
+         * 같이 묶어놨더니, 한도에 걸린 뒤로도 주소마다 네 번씩 두들기면서
+         * 쉬는 시간까지 넣고 있었어요. 만나는 즉시 접습니다.
+         */
+        if (json?.response?.error?.code === "OVER_REQUEST_LIMIT") {
+          quotaExhausted = true;
+          return null;
+        }
       }
       // JSON 이 아니면 502 같은 서버 오류거나 주소 형식이 깨진 거예요.
       // 둘을 구분할 수 없어서 캐시하지 않고 재시도합니다.
@@ -235,7 +253,7 @@ async function geocodeOne(addr, type, key) {
    * 이게 연달아 나면 하루 4만 건 한도를 쓴 거예요. 계속 두들겨봐야
    * 시간만 버리고 차단만 길어지니 배치를 접습니다. 내일 이어서 돌리면 돼요.
    */
-  if (++consecutiveServerErrors >= GIVE_UP_AFTER) throw new QuotaExhausted();
+  if (++consecutiveServerErrors >= GIVE_UP_AFTER) quotaExhausted = true;
   return null;
 }
 
@@ -262,7 +280,8 @@ export function cleanAddress(a) {
  */
 let cooldownUntil = 0;
 let consecutiveServerErrors = 0;
-export class QuotaExhausted extends Error {}
+/** 켜지면 그 뒤로는 네트워크를 안 씁니다. 캐시로만 마저 훑어요. */
+let quotaExhausted = false;
 
 const COOLDOWN_MS = 30_000;
 /** 쉬어도 이만큼 연달아 실패하면 하루치를 다 쓴 거예요. */
@@ -486,24 +505,21 @@ async function main() {
       `좌표 찍을 줄 ${needGeo.length}건 (동시 ${CONCURRENCY}개, 이미 확보 ${already}건)`,
     );
     let done = 0;
-    try {
-      await mapLimit(needGeo, CONCURRENCY, async (rec) => {
-        const got = await geocode(rec.road, rec.jibun, key);
-        if (got != null) [rec.lat, rec.lng] = got;
-        if (++done % 1000 === 0) {
-          const hit = keep.filter((r) => isKoreaCoord(r.lat, r.lng)).length;
-          console.log(`  ${done}/${needGeo.length}  (좌표 확보 ${hit}건)`);
-        }
-      });
-    } catch (e) {
-      if (!(e instanceof QuotaExhausted)) throw e;
+    let quotaAt = null;
+    await mapLimit(needGeo, CONCURRENCY, async (rec) => {
+      const got = await geocode(rec.road, rec.jibun, key);
+      if (got != null) [rec.lat, rec.lng] = got;
+      if (quotaExhausted && quotaAt == null) quotaAt = done;
+      if (++done % 1000 === 0) {
+        const hit = keep.filter((r) => isKoreaCoord(r.lat, r.lng)).length;
+        console.log(`  ${done}/${needGeo.length}  (좌표 확보 ${hit}건)`);
+      }
+    });
+    if (quotaExhausted) {
       console.warn(
-        `
-하루 호출 한도를 쓴 것 같아요 (${done}/${needGeo.length} 까지 진행).
-` +
-        `찍어둔 좌표는 캐시에 남아 있어요. 내일 같은 명령을 다시 치면 이어서 갑니다.
-` +
-        `지금까지 확보한 만큼으로 격자를 만들어 둘게요.`,
+        `\n하루 호출 한도를 ${quotaAt}/${needGeo.length} 지점에서 다 썼어요.\n` +
+        `나머지는 캐시에 있는 것만 훑었습니다 — 캐시에 없는 주소만 다음으로 넘어가요.\n` +
+        `찍어둔 좌표는 캐시에 남아 있으니, 한도가 풀린 뒤 같은 명령을 다시 치면 이어서 갑니다.`,
       );
     }
     writeFileSync(CACHE_FILE, JSON.stringify(cache));
