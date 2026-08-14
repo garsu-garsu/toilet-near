@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ImageBannerAd } from "../../components/BannerAd";
 import { DetailSheet } from "../../components/DetailSheet";
 import { MapView } from "../../components/MapView";
+import { NoToilet } from "../../components/NoToilet";
 import { Card } from "../../components/ScreenLayout";
 import { EVENT, track, trackScreen } from "../../lib/analytics";
 import { formatDistance, walkMinutes, type LatLng } from "../../lib/geo";
@@ -161,6 +162,22 @@ export function HomeScreen() {
             {tab === "map" ? (
               <div style={{ position: "absolute", inset: `${HEADER_HEIGHT}px 0 0`, overflow: "hidden" }}>
                 <MapView me={phase.me} toilets={list} radius={radius} onSelect={setPicked} />
+                {list.length === 0 && (
+                  // 지도가 아예 안 보이면 안 되니 반투명하게만 덮어요.
+                  <div
+                    style={{
+                      position: "absolute",
+                      inset: 0,
+                      display: "grid",
+                      placeItems: "center",
+                      background: "rgba(255,255,255,0.88)",
+                      zIndex: 1000,
+                      padding: 24,
+                    }}
+                  >
+                    <EmptyState />
+                  </div>
+                )}
                 {picked != null && (
                   <DetailSheet
                     t={picked}
@@ -286,7 +303,7 @@ function ListPane({ list, onGo }: { list: Toilet[]; onGo: (t: Toilet) => void })
       }}
     >
       {list.length === 0 ? (
-        <Notice text="이 반경에는 등록된 화장실이 없어요. 반경을 넓혀보세요." />
+        <EmptyState />
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {list.map((t, i) => (
@@ -391,6 +408,20 @@ function Center({ children }: { children: React.ReactNode }) {
     <div style={{ height: "100%", display: "grid", placeItems: "center", padding: 20 }}>
       {children}
     </div>
+  );
+}
+
+function EmptyState() {
+  return (
+    <Card style={{ textAlign: "center", padding: 24 }}>
+      <NoToilet />
+      <p style={{ fontSize: 17, fontWeight: 700, color: palette.ink, margin: "12px 0 4px" }}>
+        늦었습니다
+      </p>
+      <p style={{ fontSize: 14, color: palette.sub, margin: 0 }}>
+        이 반경에는 화장실이 없어요. 반경을 넓혀보세요.
+      </p>
+    </Card>
   );
 }
 
