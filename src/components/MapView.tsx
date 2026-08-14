@@ -27,6 +27,7 @@ export function MapView({ me, toilets, radius, onSelect }: Props) {
   const mapRef = useRef<L.Map | null>(null);
   const markersRef = useRef<L.LayerGroup | null>(null);
   const circleRef = useRef<L.Circle | null>(null);
+  const meMarkerRef = useRef<L.CircleMarker | null>(null);
   const [tileFailed, setTileFailed] = useState(false);
 
   // 클릭 핸들러가 최신 목록을 보게 해요. 마커를 다시 만들 때마다
@@ -69,7 +70,7 @@ export function MapView({ me, toilets, radius, onSelect }: Props) {
     tiles.addTo(map);
 
     // 내 위치는 작은 원으로. 마커로 찍으면 화장실 핀과 헷갈려요.
-    L.circleMarker([me.lat, me.lng], {
+    meMarkerRef.current = L.circleMarker([me.lat, me.lng], {
       radius: 7,
       color: "#fff",
       weight: 3,
@@ -89,6 +90,10 @@ export function MapView({ me, toilets, radius, onSelect }: Props) {
   useEffect(() => {
     const map = mapRef.current;
     if (map == null) return;
+
+    // 지도는 처음 한 번만 만들어져서, "다시 찾기"로 위치가 바뀌면
+    // 내 위치 점도 여기서 같이 옮겨줘야 해요.
+    meMarkerRef.current?.setLatLng([me.lat, me.lng]);
 
     circleRef.current?.remove();
     const circle = L.circle([me.lat, me.lng], {

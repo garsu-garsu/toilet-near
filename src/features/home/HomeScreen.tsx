@@ -26,6 +26,9 @@ type Phase =
 
 type Tab = "map" | "list";
 
+/** 반경 칩 줄(56) + 다시 찾기 줄(44). 지도·목록 패널이 이 아래부터 시작해요. */
+const HEADER_HEIGHT = 100;
+
 /**
  * 지금 내 위치.
  *
@@ -58,6 +61,8 @@ export function HomeScreen() {
   const [tab, setTab] = useState<Tab>("map");
   const [radius, setRadius] = useState<Radius>(1000);
   const [picked, setPicked] = useState<Toilet | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
 
   const locate = useCallback(async () => {
     setPhase({ k: "locating" });
@@ -83,6 +88,28 @@ export function HomeScreen() {
     trackScreen("home");
     void locate();
   }, [locate]);
+
+  /**
+   * "다시 찾기". 이동 중에 위치가 바뀌었을 때 앱을 껐다 켜지 않아도
+   * 되게 해요. 반경·탭 선택은 건드리지 않고, 위치와 목록만 새로 받습니다.
+   * 실패해도 화면에 떠 있던 목록은 그대로 두고 실패만 알려요.
+   */
+  const refresh = useCallback(() => {
+    if (refreshing) return; // 연타 방지
+    setRefreshing(true);
+    setRefreshError(null);
+    void (async () => {
+      try {
+        const me = await currentPosition();
+        const all = await findNearby(me); // openState 도 여기서 새로 계산돼요.
+        setPhase({ k: "ready", me, all });
+      } catch {
+        setRefreshError("위치를 다시 잡지 못했어요.");
+      } finally {
+        setRefreshing(false);
+      }
+    })();
+  }, [refreshing]);
 
   const list = useMemo(
     () => (phase.k === "ready" ? withinRadius(phase.all, radius) : []),
@@ -122,10 +149,17 @@ export function HomeScreen() {
 
         {phase.k === "ready" && (
           <>
-            <RadiusPicker value={radius} onChange={setRadius} count={list.length} />
+            <TopBar
+              radius={radius}
+              onChangeRadius={setRadius}
+              count={list.length}
+              onRefresh={refresh}
+              refreshing={refreshing}
+              refreshError={refreshError}
+            />
 
             {tab === "map" ? (
-              <div style={{ position: "absolute", inset: "56px 0 0", overflow: "hidden" }}>
+              <div style={{ position: "absolute", inset: `${HEADER_HEIGHT}px 0 0`, overflow: "hidden" }}>
                 <MapView me={phase.me} toilets={list} radius={radius} onSelect={setPicked} />
                 {picked != null && (
                   <DetailSheet
@@ -160,14 +194,20 @@ export function HomeScreen() {
 
 /* ------------------------------------------------------------------ 조각 */
 
-function RadiusPicker({
-  value,
-  onChange,
+function TopBar({
+  radius,
+  onChangeRadius,
   count,
+  onRefresh,
+  refreshing,
+  refreshError,
 }: {
-  value: Radius;
-  onChange: (r: Radius) => void;
+  radius: Radius;
+  onChangeRadius: (r: Radius) => void;
   count: number;
+  onRefresh: () => void;
+  refreshing: boolean;
+  refreshError: string | null;
 }) {
   return (
     <div
@@ -176,33 +216,60 @@ function RadiusPicker({
         top: 0,
         left: 0,
         right: 0,
-        height: 56,
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-        padding: "0 16px",
         background: palette.bg,
         zIndex: 2,
       }}
     >
-      {RADIUS_OPTIONS.map((r) => (
+      <div
+        style={{
+          height: 56,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          padding: "0 16px",
+        }}
+      >
+        {RADIUS_OPTIONS.map((r) => (
+          <button
+            key={r}
+            onClick={() => onChangeRadius(r)}
+            style={{
+              border: "none",
+              borderRadius: 999,
+              padding: "8px 14px",
+              fontSize: 14,
+              fontWeight: 700,
+              color: radius === r ? palette.white : palette.sub,
+              background: radius === r ? palette.primary : "rgba(27,29,33,0.06)",
+            }}
+          >
+            {r < 1000 ? `${r}m` : `${r / 1000}km`}
+          </button>
+        ))}
+        <span style={{ marginLeft: "auto", fontSize: 13, color: palette.sub }}>{count}곳</span>
+      </div>
+
+      {/* 지도·목록 양쪽에 공유되는 줄이라 여기 두면 탭을 넘나들며 눌러요. */}
+      <div style={{ height: 44, display: "flex", alignItems: "center", gap: 8, padding: "0 16px 10px" }}>
         <button
-          key={r}
-          onClick={() => onChange(r)}
+          onClick={onRefresh}
+          disabled={refreshing}
           style={{
             border: "none",
-            borderRadius: 999,
+            borderRadius: 10,
             padding: "8px 14px",
             fontSize: 14,
             fontWeight: 700,
-            color: value === r ? palette.white : palette.sub,
-            background: value === r ? palette.primary : "rgba(27,29,33,0.06)",
+            color: refreshing ? palette.sub : palette.primary,
+            background: "rgba(47,111,237,0.10)",
           }}
         >
-          {r < 1000 ? `${r}m` : `${r / 1000}km`}
+          {refreshing ? "찾는 중…" : "다시 찾기"}
         </button>
-      ))}
-      <span style={{ marginLeft: "auto", fontSize: 13, color: palette.sub }}>{count}곳</span>
+        {refreshError != null && (
+          <span style={{ fontSize: 13, color: palette.unknown }}>{refreshError}</span>
+        )}
+      </div>
     </div>
   );
 }
@@ -212,7 +279,7 @@ function ListPane({ list, onGo }: { list: Toilet[]; onGo: (t: Toilet) => void })
     <div
       style={{
         position: "absolute",
-        inset: "56px 0 0",
+        inset: `${HEADER_HEIGHT}px 0 0`,
         overflowY: "auto",
         WebkitOverflowScrolling: "touch",
         padding: "0 16px 24px",
