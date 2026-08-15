@@ -135,7 +135,7 @@ export function HomeScreen() {
   };
 
   return (
-    <div style={{ height: "100%", display: "flex", flexDirection: "column", background: palette.bg }}>
+    <div style={{ height: "100%", display: "flex", flexDirection: "column", background: palette.bg, position: "relative" }}>
       {/* ---------------------------------------------------------- 본문 */}
       <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
         {phase.k === "locating" && <Center><Notice text="주변을 찾고 있어요…" /></Center>}
@@ -220,17 +220,37 @@ export function HomeScreen() {
         )}
       </div>
 
-      {/* ------------------------------------------------------- 하단 탭 */}
+      {/* --------------------------------------------------- 하단 탭 (플로팅)
+          바닥에 꽉 채우면 토스 앱 자체 하단 탭과 모양이 겹쳐서, 사용자가 지금
+          어디에 있는지 헷갈려요. 앱인토스 UX 가이드가 캡슐형 플로팅을 요구합니다. */}
       <nav
         style={{
-          flexShrink: 0,
+          position: "absolute",
+          left: 0,
+          right: 0,
+          // 배너 자리가 없을 때 홈 인디케이터에 걸리지 않게 띄워요.
+          bottom: "calc(12px + env(safe-area-inset-bottom))",
           display: "flex",
-          borderTop: `1px solid rgba(27,29,33,0.08)`,
-          background: palette.white,
+          justifyContent: "center",
+          // 캡슐 밖은 손가락이 그대로 지도로 통과해야 해요.
+          pointerEvents: "none",
+          // 상세 카드(1000)보다 위에 있어야 탭이 안 가려져요.
+          zIndex: 1100,
         }}
       >
-        <TabButton active={tab === "map"} onClick={() => setTab("map")} label="지도" />
-        <TabButton active={tab === "list"} onClick={() => setTab("list")} label="목록" elRef={listTabRef} />
+        <div
+          style={{
+            pointerEvents: "auto",
+            display: "inline-flex",
+            background: palette.white,
+            borderRadius: 999,
+            padding: 6,
+            boxShadow: "0 6px 20px rgba(27,29,33,0.18)",
+          }}
+        >
+          <TabButton active={tab === "map"} onClick={() => setTab("map")} label="지도" icon="🗺️" />
+          <TabButton active={tab === "list"} onClick={() => setTab("list")} label="목록" icon="📋" elRef={listTabRef} />
+        </div>
       </nav>
     </div>
   );
@@ -332,7 +352,7 @@ function ListPane({ list, onGo }: { list: Toilet[]; onGo: (t: Toilet) => void })
         inset: `${HEADER_HEIGHT}px 0 0`,
         overflowY: "auto",
         WebkitOverflowScrolling: "touch",
-        padding: "0 16px 24px",
+        padding: "0 16px calc(96px + env(safe-area-inset-bottom))",
       }}
     >
       {list.length === 0 ? (
@@ -411,11 +431,13 @@ function TabButton({
   active,
   onClick,
   label,
+  icon,
   elRef,
 }: {
   active: boolean;
   onClick: () => void;
   label: string;
+  icon: string;
   elRef?: React.RefObject<HTMLButtonElement>;
 }) {
   return (
@@ -423,18 +445,20 @@ function TabButton({
       ref={elRef}
       onClick={onClick}
       style={{
-        flex: 1,
         border: "none",
         background: "transparent",
-        padding: "14px 0",
-        fontSize: 16,
-        fontWeight: 700,
-        color: active ? palette.primary : palette.sub,
-        borderTop: `3px solid ${active ? palette.primary : "transparent"}`,
-        marginTop: -1,
+        borderRadius: 999,
+        padding: "8px 24px",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: 2,
       }}
     >
-      {label}
+      <span style={{ fontSize: 20, lineHeight: 1.1, opacity: active ? 1 : 0.4 }}>{icon}</span>
+      <span style={{ fontSize: 13, fontWeight: 700, color: active ? palette.ink : palette.sub }}>
+        {label}
+      </span>
     </button>
   );
 }
