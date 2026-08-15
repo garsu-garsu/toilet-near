@@ -27,7 +27,8 @@ export function MapView({ me, toilets, radius, onSelect }: Props) {
   const mapRef = useRef<L.Map | null>(null);
   const markersRef = useRef<L.LayerGroup | null>(null);
   const circleRef = useRef<L.Circle | null>(null);
-  const meMarkerRef = useRef<L.CircleMarker | null>(null);
+  const meHaloRef = useRef<L.CircleMarker | null>(null);
+  const meDotRef = useRef<L.CircleMarker | null>(null);
   const [tileFailed, setTileFailed] = useState(false);
 
   // 클릭 핸들러가 최신 목록을 보게 해요. 마커를 다시 만들 때마다
@@ -69,9 +70,16 @@ export function MapView({ me, toilets, radius, onSelect }: Props) {
     });
     tiles.addTo(map);
 
-    // 내 위치는 작은 원으로. 마커로 찍으면 화장실 핀과 헷갈려요.
-    meMarkerRef.current = L.circleMarker([me.lat, me.lng], {
-      radius: 7,
+    // 내 위치는 점 + 후광으로. 화장실은 장소를 가리키는 물방울 핀이라
+    // 모양 자체가 달라서 크기로만 구분하지 않아도 헷갈리지 않아요.
+    meHaloRef.current = L.circleMarker([me.lat, me.lng], {
+      radius: 16,
+      stroke: false,
+      fillColor: palette.primary,
+      fillOpacity: 0.25,
+    }).addTo(map);
+    meDotRef.current = L.circleMarker([me.lat, me.lng], {
+      radius: 6,
       color: "#fff",
       weight: 3,
       fillColor: palette.primary,
@@ -92,8 +100,9 @@ export function MapView({ me, toilets, radius, onSelect }: Props) {
     if (map == null) return;
 
     // 지도는 처음 한 번만 만들어져서, "다시 찾기"로 위치가 바뀌면
-    // 내 위치 점도 여기서 같이 옮겨줘야 해요.
-    meMarkerRef.current?.setLatLng([me.lat, me.lng]);
+    // 내 위치 점 + 후광도 여기서 같이 옮겨줘야 해요.
+    meHaloRef.current?.setLatLng([me.lat, me.lng]);
+    meDotRef.current?.setLatLng([me.lat, me.lng]);
 
     circleRef.current?.remove();
     const circle = L.circle([me.lat, me.lng], {
@@ -163,17 +172,30 @@ export function MapView({ me, toilets, radius, onSelect }: Props) {
 }
 
 /**
- * 핀. Leaflet 기본 마커는 이미지 파일을 따로 물어서(번들 경로가 깨지기 쉬워요)
+ * 화장실 핀. Leaflet 기본 마커는 이미지 파일을 따로 물어서(번들 경로가 깨지기 쉬워요)
  * div 아이콘으로 직접 그립니다.
+ *
+ * 땅의 한 지점을 가리키는 물방울 모양이라 "내 위치" 점과 헷갈리지 않아요.
+ * 뾰족한 끝이 실제 좌표라서 iconAnchor 를 거기에 맞춰요.
  */
+const PIN_W = 28;
+const PIN_H = 36;
+
 function pinIcon(color: string, opacity = 1): L.DivIcon {
   return L.divIcon({
     className: "",
-    html:
-      `<div style="width:24px;height:24px;border-radius:50%;background:${color};` +
-      `border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35);` +
-      `opacity:${opacity}"></div>`,
-    iconSize: [24, 24],
-    iconAnchor: [12, 12],
+    html: `
+      <div style="width:${PIN_W}px;height:${PIN_H}px;opacity:${opacity};filter:drop-shadow(0 1px 3px rgba(0,0,0,.35))">
+        <svg width="${PIN_W}" height="${PIN_H}" viewBox="0 0 28 36" xmlns="http://www.w3.org/2000/svg">
+          <path
+            d="M14 1 C7.1 1 1.5 6.6 1.5 13.5 C1.5 22 14 35 14 35 C14 35 26.5 22 26.5 13.5 C26.5 6.6 20.9 1 14 1 Z"
+            fill="${color}"
+            stroke="#fff"
+            stroke-width="2.5"
+          />
+        </svg>
+      </div>`,
+    iconSize: [PIN_W, PIN_H],
+    iconAnchor: [PIN_W / 2, PIN_H],
   });
 }
