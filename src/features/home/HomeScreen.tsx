@@ -1,7 +1,8 @@
 import { Device } from "@apps-in-toss/web-framework";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ImageBannerAd } from "../../components/BannerAd";
+import { CoachMarks } from "../../components/CoachMarks";
 import { DetailSheet } from "../../components/DetailSheet";
 import { MapView } from "../../components/MapView";
 import { NoToilet } from "../../components/NoToilet";
@@ -64,6 +65,12 @@ export function HomeScreen() {
   const [picked, setPicked] = useState<Toilet | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
+
+  // 코치마크가 가리킬 요소들.
+  const radiusRef = useRef<HTMLDivElement>(null);
+  const refreshRef = useRef<HTMLButtonElement>(null);
+  const mapPaneRef = useRef<HTMLDivElement>(null);
+  const listTabRef = useRef<HTMLButtonElement>(null);
 
   const locate = useCallback(async () => {
     setPhase({ k: "locating" });
@@ -157,10 +164,15 @@ export function HomeScreen() {
               onRefresh={refresh}
               refreshing={refreshing}
               refreshError={refreshError}
+              radiusRef={radiusRef}
+              refreshRef={refreshRef}
             />
 
             {tab === "map" ? (
-              <div style={{ position: "absolute", inset: `${HEADER_HEIGHT}px 0 0`, overflow: "hidden" }}>
+              <div
+                ref={mapPaneRef}
+                style={{ position: "absolute", inset: `${HEADER_HEIGHT}px 0 0`, overflow: "hidden" }}
+              >
                 <MapView me={phase.me} toilets={list} radius={radius} onSelect={setPicked} />
                 {list.length === 0 && (
                   // 지도가 아예 안 보이면 안 되니 반투명하게만 덮어요.
@@ -189,6 +201,21 @@ export function HomeScreen() {
             ) : (
               <ListPane list={list} onGo={openDirections} />
             )}
+
+            {/* 위치를 못 잡았거나 오류 화면일 땐 안 떠요 — 지도가 준비된 뒤에만. */}
+            <CoachMarks
+              storageKey="toilet-near:coach:v1"
+              steps={[
+                { ref: radiusRef, title: "반경을 고르세요", body: "얼마나 가까운 곳까지 찾을지 정할 수 있어요." },
+                { ref: refreshRef, title: "걸어가다 위치가 바뀌었나요?", body: "이 버튼을 누르면 지금 위치로 다시 찾아요." },
+                {
+                  ref: mapPaneRef,
+                  title: "물방울은 화장실, 파란 점은 나예요",
+                  body: "핀을 누르면 개방시간과 거리를 자세히 볼 수 있어요.",
+                },
+                { ref: listTabRef, title: "목록으로도 볼 수 있어요", body: "가까운 순으로 쭉 보고 싶으면 여기를 눌러요." },
+              ]}
+            />
           </>
         )}
       </div>
@@ -203,7 +230,7 @@ export function HomeScreen() {
         }}
       >
         <TabButton active={tab === "map"} onClick={() => setTab("map")} label="지도" />
-        <TabButton active={tab === "list"} onClick={() => setTab("list")} label="목록" />
+        <TabButton active={tab === "list"} onClick={() => setTab("list")} label="목록" elRef={listTabRef} />
       </nav>
     </div>
   );
@@ -218,6 +245,8 @@ function TopBar({
   onRefresh,
   refreshing,
   refreshError,
+  radiusRef,
+  refreshRef,
 }: {
   radius: Radius;
   onChangeRadius: (r: Radius) => void;
@@ -225,6 +254,8 @@ function TopBar({
   onRefresh: () => void;
   refreshing: boolean;
   refreshError: string | null;
+  radiusRef: React.RefObject<HTMLDivElement>;
+  refreshRef: React.RefObject<HTMLButtonElement>;
 }) {
   return (
     <div
@@ -238,6 +269,7 @@ function TopBar({
       }}
     >
       <div
+        ref={radiusRef}
         style={{
           height: 56,
           display: "flex",
@@ -269,6 +301,7 @@ function TopBar({
       {/* 지도·목록 양쪽에 공유되는 줄이라 여기 두면 탭을 넘나들며 눌러요. */}
       <div style={{ height: 44, display: "flex", alignItems: "center", gap: 8, padding: "0 16px 10px" }}>
         <button
+          ref={refreshRef}
           onClick={onRefresh}
           disabled={refreshing}
           style={{
@@ -378,13 +411,16 @@ function TabButton({
   active,
   onClick,
   label,
+  elRef,
 }: {
   active: boolean;
   onClick: () => void;
   label: string;
+  elRef?: React.RefObject<HTMLButtonElement>;
 }) {
   return (
     <button
+      ref={elRef}
       onClick={onClick}
       style={{
         flex: 1,
