@@ -69,7 +69,6 @@ export function HomeScreen() {
   // 코치마크가 가리킬 요소들.
   const radiusRef = useRef<HTMLDivElement>(null);
   const refreshRef = useRef<HTMLButtonElement>(null);
-  const mapPaneRef = useRef<HTMLDivElement>(null);
   const listTabRef = useRef<HTMLButtonElement>(null);
 
   const locate = useCallback(async () => {
@@ -170,7 +169,6 @@ export function HomeScreen() {
 
             {tab === "map" ? (
               <div
-                ref={mapPaneRef}
                 style={{ position: "absolute", inset: `${HEADER_HEIGHT}px 0 0`, overflow: "hidden" }}
               >
                 <MapView me={phase.me} toilets={list} radius={radius} onSelect={setPicked} />
@@ -208,11 +206,8 @@ export function HomeScreen() {
               steps={[
                 { ref: radiusRef, title: "반경을 고르세요", body: "얼마나 가까운 곳까지 찾을지 정할 수 있어요." },
                 { ref: refreshRef, title: "걸어가다 위치가 바뀌었나요?", body: "이 버튼을 누르면 지금 위치로 다시 찾아요." },
-                {
-                  ref: mapPaneRef,
-                  title: "물방울은 화장실, 파란 점은 나예요",
-                  body: "핀을 누르면 개방시간과 거리를 자세히 볼 수 있어요.",
-                },
+                // 지도 전체를 짚는 단계는 뺐어요. 구멍이 화면을 다 덮으면 어두운
+                // 덮개가 사라져서 흰 글씨가 지도 위에 묻혀 안 읽힙니다.
                 { ref: listTabRef, title: "목록으로도 볼 수 있어요", body: "가까운 순으로 쭉 보고 싶으면 여기를 눌러요." },
               ]}
             />
