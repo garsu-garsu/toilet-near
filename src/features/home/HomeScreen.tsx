@@ -58,9 +58,27 @@ async function currentPosition(): Promise<LatLng> {
   }
 }
 
+/**
+ * 주요 기능 딥링크로 들어오면 그 탭부터 엽니다 — intoss://{앱}/list.
+ * 경로 끝 조각과 ?screen= 둘 다 보고, 모르는 값이면 평소대로 지도.
+ * (로또 알림이 쓰는 방식과 같아요.)
+ */
+function initialTab(): Tab {
+  try {
+    const { pathname, search } = window.location;
+    const screen =
+      new URLSearchParams(search).get("screen") ??
+      pathname.split("/").filter(Boolean).pop();
+    if (screen === "list" || screen === "map") return screen;
+  } catch {
+    /* noop */
+  }
+  return "map";
+}
+
 export function HomeScreen() {
   const [phase, setPhase] = useState<Phase>({ k: "locating" });
-  const [tab, setTab] = useState<Tab>("map");
+  const [tab, setTab] = useState<Tab>(initialTab);
   const [radius, setRadius] = useState<Radius>(1000);
   const [picked, setPicked] = useState<Toilet | null>(null);
   const [refreshing, setRefreshing] = useState(false);
