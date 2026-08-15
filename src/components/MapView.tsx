@@ -72,13 +72,22 @@ export function MapView({ me, toilets, radius, onSelect }: Props) {
 
     // 내 위치는 점 + 후광으로. 화장실은 장소를 가리키는 물방울 핀이라
     // 모양 자체가 달라서 크기로만 구분하지 않아도 헷갈리지 않아요.
+    // circleMarker 는 markerPane(z-index 600)보다 낮은 overlayPane(400)에 그려져서
+    // 핀 아래 깔려요. 핀보다 위인 전용 pane 을 만들어 그 안에 둡니다.
+    // 클릭 대상이 아니니 interactive:false 로 눌러도 뒤 지도가 반응하게 둬요.
+    const mePane = map.createPane("me");
+    mePane.style.zIndex = "650";
     meHaloRef.current = L.circleMarker([me.lat, me.lng], {
+      pane: "me",
+      interactive: false,
       radius: 16,
       stroke: false,
       fillColor: palette.primary,
       fillOpacity: 0.25,
     }).addTo(map);
     meDotRef.current = L.circleMarker([me.lat, me.lng], {
+      pane: "me",
+      interactive: false,
       radius: 6,
       color: "#fff",
       weight: 3,
