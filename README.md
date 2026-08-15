@@ -31,7 +31,11 @@
 
 | 지도 | 목록 |
 |---|---|
-| ![map](screenshots/1-map.png) | ![list](screenshots/2-list.png) |
+| ![지도](screenshots/readme-map.png) | ![목록](screenshots/readme-list.png) |
+
+| 상세 | 반경 안에 없을 때 |
+|---|---|
+| ![상세](screenshots/readme-detail.png) | ![없음](screenshots/readme-empty.png) |
 
 ## ✨ 핵심 기능
 

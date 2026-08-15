@@ -3,7 +3,10 @@ dist
 *.ait
 .env
 scripts/.geocache.json
-screenshots/
+
+# 작업하며 찍은 검증용 캡쳐는 빼고, README 에 쓰는 것만 올려요.
+screenshots/*
+!screenshots/readme-*.png
 
 # 원본 CSV(16MB)와 작업 기록만 빼요. 맨 앞 슬래시가 없으면 public/data 까지
 # 같이 걸려서, 격자 파일이 깃에 안 올라갑니다 — 그건 앱의 데이터 그 자체이고
