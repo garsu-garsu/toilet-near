@@ -11,7 +11,9 @@
     "typecheck": "tsc -b --force",
     "data": "node scripts/build-toilets.mjs",
     "probe": "node scripts/build-toilets.mjs --probe",
-    "check:hours": "node --experimental-strip-types scripts/check-hours.ts"
+    "check:hours": "node --experimental-strip-types scripts/check-hours.ts",
+    "check:sponsor": "node --experimental-strip-types scripts/check-sponsor.ts",
+    "check:growth": "node --experimental-strip-types scripts/check-growth.ts"
   },
   "dependencies": {
     "@apps-in-toss/web-framework": "^3.0.2",

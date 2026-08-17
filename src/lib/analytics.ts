@@ -39,4 +39,7 @@ export const EVENT = {
   locationDenied: "location_denied",
   nearbyFound: "nearby_found",
   directionsOpened: "directions_opened",
+  sponsorPromptDismissed: "sponsor_prompt_dismissed",
+  sponsorOpened: "sponsor_screen_opened",
+  sponsorPurchased: "sponsor_purchased",
 } as const;

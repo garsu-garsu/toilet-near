@@ -8,10 +8,11 @@ import { palette, stateStyle } from "../theme";
  * TDS BottomSheet 대신 직접 그려요 — 지도 위에 겹치는 얕은 카드 하나뿐이라
  * 딤·포커스락이 있는 바텀시트를 쓰면 지도를 못 움직여요.
  */
-export function DetailSheet({ t, onClose, onGo }: {
+export function DetailSheet({ t, onClose, onGo, onShare }: {
   t: Toilet;
   onClose: () => void;
   onGo: () => void;
+  onShare: () => void;
 }) {
   const s = stateStyle(t.state);
   return (
@@ -74,22 +75,40 @@ export function DetailSheet({ t, onClose, onGo }: {
         </button>
       </div>
 
-      <button
-        onClick={onGo}
-        style={{
-          width: "100%",
-          marginTop: 14,
-          border: "none",
-          borderRadius: 12,
-          padding: "14px 0",
-          fontSize: 16,
-          fontWeight: 700,
-          color: palette.white,
-          background: palette.primary,
-        }}
-      >
-        길찾기
-      </button>
+      {/* 길찾기가 주인공이라 넓게 두고, 공유는 옆에 작게 둬요. */}
+      <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+        <button
+          onClick={onGo}
+          style={{
+            flex: 1,
+            border: "none",
+            borderRadius: 12,
+            padding: "14px 0",
+            fontSize: 16,
+            fontWeight: 700,
+            color: palette.white,
+            background: palette.primary,
+          }}
+        >
+          길찾기
+        </button>
+        <button
+          onClick={onShare}
+          aria-label="이 화장실 공유"
+          style={{
+            flexShrink: 0,
+            border: `1px solid ${palette.line}`,
+            borderRadius: 12,
+            padding: "14px 18px",
+            fontSize: 16,
+            fontWeight: 700,
+            color: palette.primary,
+            background: palette.card,
+          }}
+        >
+          공유
+        </button>
+      </div>
     </div>
   );
 }

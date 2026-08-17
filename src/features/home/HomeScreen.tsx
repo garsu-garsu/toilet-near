@@ -4,14 +4,26 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ImageBannerAd } from "../../components/BannerAd";
 import { CoachMarks } from "../../components/CoachMarks";
 import { DetailSheet } from "../../components/DetailSheet";
+import { MapAppPicker } from "../../components/MapAppPicker";
 import { MapView } from "../../components/MapView";
 import { NoToilet } from "../../components/NoToilet";
 import { Card } from "../../components/ScreenLayout";
+import { SponsorPrompt } from "../../components/SponsorPrompt";
+import { useAdFreeAccess } from "../../hooks/useAdFreeAccess";
 import { EVENT, track, trackScreen } from "../../lib/analytics";
 import { formatDistance, walkMinutes, type LatLng } from "../../lib/geo";
 import { hoursLabel } from "../../lib/hours";
 import {
   directionsUrl,
+  forgetMapApp,
+  mapAppName,
+  rememberMapApp,
+  savedMapApp,
+  type MapAppId,
+} from "../../lib/mapApps";
+import { noteGoodExperience } from "../../lib/review";
+import { shareToilet } from "../../lib/share";
+import {
   findNearby,
   RADIUS_OPTIONS,
   withinRadius,
@@ -76,7 +88,13 @@ function initialTab(): Tab {
   return "map";
 }
 
-export function HomeScreen() {
+export function HomeScreen({
+  onOpenSponsor,
+  onReadyChange,
+}: {
+  onOpenSponsor: () => void;
+  onReadyChange: (ready: boolean) => void;
+}) {
   const [phase, setPhase] = useState<Phase>({ k: "locating" });
   const [tab, setTab] = useState<Tab>(initialTab);
   const [radius, setRadius] = useState<Radius>(1000);
@@ -84,10 +102,35 @@ export function HomeScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
 
+  const adFree = useAdFreeAccess();
+
   // 코치마크가 가리킬 요소들.
   const radiusRef = useRef<HTMLDivElement>(null);
   const refreshRef = useRef<HTMLButtonElement>(null);
   const listTabRef = useRef<HTMLButtonElement>(null);
+
+  // 어느 지도로 안내할지. null이면 아직 안 골랐다는 뜻이라 길찾기 때 물어봐요.
+  const [mapApp, setMapApp] = useState<MapAppId | null>(() => savedMapApp());
+  /** 지도를 고르는 동안 어디로 갈 참이었는지 들고 있어요. */
+  const [pendingGo, setPendingGo] = useState<Toilet | null>(null);
+
+  // 길찾기 → 앱으로 복귀 감지. 진입 직후가 아니라 이 순간에만 후원 진입점을 보여줘요.
+  const wentToDirectionsRef = useRef(false);
+  const sponsorDismissedRef = useRef(false);
+  const [showSponsorPrompt, setShowSponsorPrompt] = useState(false);
+
+  useEffect(() => {
+    const onVisibility = () => {
+      if (!document.hidden && wentToDirectionsRef.current) {
+        wentToDirectionsRef.current = false;
+        // 길찾기까지 열고 돌아온 것 = 이 앱이 제 일을 한 순간. 리뷰는 여기서만 물어봐요.
+        noteGoodExperience();
+        if (!sponsorDismissedRef.current) setShowSponsorPrompt(true);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, []);
 
   const locate = useCallback(async () => {
     setPhase({ k: "locating" });
@@ -113,6 +156,11 @@ export function HomeScreen() {
     trackScreen("home");
     void locate();
   }, [locate]);
+
+  // 지도/목록이 실제로 그려진 뒤에만 App 의 하단 배너를 켜요.
+  useEffect(() => {
+    onReadyChange(phase.k === "ready");
+  }, [phase.k, onReadyChange]);
 
   /**
    * "다시 찾기". 이동 중에 위치가 바뀌었을 때 앱을 껐다 켜지 않아도
@@ -146,9 +194,20 @@ export function HomeScreen() {
     if (picked != null && !list.includes(picked)) setPicked(null);
   }, [list, picked]);
 
+  /** 고른 지도로 실제로 넘겨요. */
+  const goWith = (app: MapAppId, t: Toilet) => {
+    track(EVENT.directionsOpened, { name: t.name, distance: Math.round(t.distance), app });
+    wentToDirectionsRef.current = true;
+    void Device.openURL(directionsUrl(app, { name: t.name, lat: t.lat, lng: t.lng }));
+  };
+
+  /** 아직 지도를 안 골랐으면 고르는 창을 먼저 띄워요. */
   const openDirections = (t: Toilet) => {
-    track(EVENT.directionsOpened, { name: t.name, distance: Math.round(t.distance) });
-    void Device.openURL(directionsUrl(t));
+    if (mapApp == null) {
+      setPendingGo(t);
+      return;
+    }
+    goWith(mapApp, t);
   };
 
   return (
@@ -211,11 +270,37 @@ export function HomeScreen() {
                     t={picked}
                     onClose={() => setPicked(null)}
                     onGo={() => openDirections(picked)}
+                    onShare={() => void shareToilet(picked)}
                   />
                 )}
               </div>
             ) : (
-              <ListPane list={list} onGo={openDirections} />
+              <ListPane
+                list={list}
+                onGo={openDirections}
+                adFree={adFree}
+                mapApp={mapApp}
+                onResetMapApp={() => {
+                  forgetMapApp();
+                  setMapApp(null);
+                }}
+              />
+            )}
+
+            {/* 길찾기를 눌렀을 때만 열려요. 진입 직후에 뜨는 창이 아닙니다. */}
+            {pendingGo != null && (
+              <MapAppPicker
+                onPick={(app, remember) => {
+                  if (remember) {
+                    rememberMapApp(app);
+                    setMapApp(app);
+                  }
+                  const target = pendingGo;
+                  setPendingGo(null);
+                  goWith(app, target);
+                }}
+                onClose={() => setPendingGo(null)}
+              />
             )}
 
             {/* 위치를 못 잡았거나 오류 화면일 땐 안 떠요 — 지도가 준비된 뒤에만. */}
@@ -229,6 +314,26 @@ export function HomeScreen() {
                 { ref: listTabRef, title: "목록으로도 볼 수 있어요", body: "가까운 순으로 쭉 보고 싶으면 여기를 눌러요." },
               ]}
             />
+
+            {/* 길찾기를 누르고 돌아왔을 때만. 상세 카드와 겹치지 않게 picked가 없을 때만 떠요.
+                상품이 실제로 팔리는지는 여기서 미리 확인하지 않아요 — 그 확인
+                (`IAP.getProductItemList`)이 진입 직후 호출로 잡혀서 반려됐어요.
+                후원 화면이 열릴 때 스스로 확인하고, 없으면 안내를 보여줍니다. */}
+            {showSponsorPrompt && !adFree && picked == null && (
+              <SponsorPrompt
+                onOpen={() => {
+                  track(EVENT.sponsorOpened, { context: "return_from_directions" });
+                  setShowSponsorPrompt(false);
+                  sponsorDismissedRef.current = true;
+                  onOpenSponsor();
+                }}
+                onDismiss={() => {
+                  track(EVENT.sponsorPromptDismissed);
+                  setShowSponsorPrompt(false);
+                  sponsorDismissedRef.current = true;
+                }}
+              />
+            )}
           </>
         )}
       </div>
@@ -357,7 +462,19 @@ function TopBar({
   );
 }
 
-function ListPane({ list, onGo }: { list: Toilet[]; onGo: (t: Toilet) => void }) {
+function ListPane({
+  list,
+  onGo,
+  adFree,
+  mapApp,
+  onResetMapApp,
+}: {
+  list: Toilet[];
+  onGo: (t: Toilet) => void;
+  adFree: boolean;
+  mapApp: MapAppId | null;
+  onResetMapApp: () => void;
+}) {
   return (
     <div
       style={{
@@ -378,10 +495,48 @@ function ListPane({ list, onGo }: { list: Toilet[]; onGo: (t: Toilet) => void })
         </div>
       )}
 
-      {/* 이미지형 배너 — 목록을 끝까지 내린 사람에게만 보여요. */}
-      <div style={{ marginTop: 24 }}>
-        <ImageBannerAd />
-      </div>
+      {/* 이미지형 배너 — 목록을 끝까지 내린 사람에게만 보여요. 광고 없이 보기 중엔 숨겨요. */}
+      {!adFree && (
+        <div style={{ marginTop: 24 }}>
+          <ImageBannerAd />
+        </div>
+      )}
+
+      {/* 지도 앱을 기억해 둔 사람에게만 되돌리는 줄을 보여줘요.
+          안드로이드 "기본으로 열기 초기화" 를 앱 안에서 하는 자리입니다. */}
+      {mapApp != null && (
+        <div
+          style={{
+            marginTop: 16,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 8,
+            fontSize: 13,
+            color: palette.sub,
+          }}
+        >
+          <span>
+            길찾기는 <b style={{ color: palette.ink }}>{mapAppName(mapApp)}</b>로 열려요
+          </span>
+          <button
+            type="button"
+            onClick={onResetMapApp}
+            style={{
+              flexShrink: 0,
+              border: "none",
+              borderRadius: 10,
+              padding: "8px 12px",
+              fontSize: 13,
+              fontWeight: 700,
+              color: palette.primary,
+              background: "rgba(47,111,237,0.10)",
+            }}
+          >
+            다시 고르기
+          </button>
+        </div>
+      )}
 
       <p style={{ fontSize: 12, color: palette.sub, marginTop: 16, lineHeight: 1.6 }}>
         행정안전부 전국공중화장실·공공시설개방정보 표준데이터 기준이에요.
