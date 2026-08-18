@@ -7,6 +7,7 @@ import { SponsorScreen } from "./features/sponsor/SponsorScreen";
 import { useAdFreeAccess } from "./hooks/useAdFreeAccess";
 import { AD_GROUP_ID_BANNER } from "./lib/env";
 import { restoreSponsorAccess } from "./lib/iapRestore";
+import { palette } from "./theme";
 
 type View = "home" | "sponsor";
 
@@ -18,9 +19,6 @@ type View = "home" | "sponsor";
 export default function App() {
   const [view, setView] = useState<View>("home");
   const adFree = useAdFreeAccess();
-  // 홈 화면이 위치/목록을 다 그리기 전엔 배너를 숨겨요 — 안 그러면 진입 직후
-  // 하단에 흰 배너 블록만 떠서 바텀시트처럼 보인다는 반려를 받아요.
-  const [homeReady, setHomeReady] = useState(false);
 
   const viewRef = useRef(view);
   viewRef.current = view;
@@ -53,32 +51,29 @@ export default function App() {
     <div style={{ position: "fixed", inset: 0, display: "flex", flexDirection: "column" }}>
       <div style={{ flex: 1, minHeight: 0 }}>
         {view === "home" ? (
-          <HomeScreen onOpenSponsor={() => setView("sponsor")} onReadyChange={setHomeReady} />
+          <HomeScreen onOpenSponsor={() => setView("sponsor")} />
         ) : (
           <SponsorScreen
-            onClose={() => {
-              // 홈으로 돌아가면 HomeScreen 이 다시 마운트돼 위치를 새로 잡아요 —
-              // 그 사이 배너가 잠깐이라도 뜨지 않게 먼저 꺼둡니다.
-              setHomeReady(false);
-              setView("home");
-            }}
+            onClose={() => setView("home")}
           />
         )}
       </div>
       {/*
-        광고그룹 ID가 없으면 자리 자체를 만들지 않아요. 배너는 안 뜨는데 96px
-        높이만 남아서 하단에 흰 여백이 크게 깔립니다. 나중에 ID를 넣으면
-        원래대로 배너 자리가 생겨요. 광고 없이 보기가 켜져 있는 동안도 숨겨요.
-        홈 화면일 때는 HomeScreen 이 준비(homeReady)됐을 때만 띄워요 — 후원
-        화면에서는 원래대로 항상 보여요.
+        하단 고정 배너.
+        자리는 앱이 켜지는 순간부터 잡아두고, 배경도 화면색과 같게 둡니다.
+        위치를 잡은 뒤에 자리를 만들면 화면이 다 그려진 다음 아래에서 블록이
+        올라오는 모양이 돼서, 심사가 "접속 직후 바텀시트" 로 봅니다(진료중
+        20260817-15 반려). 흰 배경으로 미리 잡아두는 것도 같은 이유로 반려된
+        적이 있어요(약궁합 20260816-8). 자리는 잡되 눈에 띄지 않게 두는 게 답.
+        광고그룹 ID가 없거나 광고 없이 보기가 켜져 있으면 자리 자체를 안 만들어요.
       */}
-      {!adFree && AD_GROUP_ID_BANNER !== "" && (view === "sponsor" || homeReady) && (
+      {!adFree && AD_GROUP_ID_BANNER !== "" && (
         <div
           style={{
             flexShrink: 0,
             height: 96,
             paddingBottom: "env(safe-area-inset-bottom)",
-            background: "#FFFFFF",
+            background: palette.bg,
           }}
         >
           <BannerAd />

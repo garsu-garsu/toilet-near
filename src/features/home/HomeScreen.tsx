@@ -88,13 +88,7 @@ function initialTab(): Tab {
   return "map";
 }
 
-export function HomeScreen({
-  onOpenSponsor,
-  onReadyChange,
-}: {
-  onOpenSponsor: () => void;
-  onReadyChange: (ready: boolean) => void;
-}) {
+export function HomeScreen({ onOpenSponsor }: { onOpenSponsor: () => void }) {
   const [phase, setPhase] = useState<Phase>({ k: "locating" });
   const [tab, setTab] = useState<Tab>(initialTab);
   const [radius, setRadius] = useState<Radius>(1000);
@@ -156,11 +150,6 @@ export function HomeScreen({
     trackScreen("home");
     void locate();
   }, [locate]);
-
-  // 지도/목록이 실제로 그려진 뒤에만 App 의 하단 배너를 켜요.
-  useEffect(() => {
-    onReadyChange(phase.k === "ready");
-  }, [phase.k, onReadyChange]);
 
   /**
    * "다시 찾기". 이동 중에 위치가 바뀌었을 때 앱을 껐다 켜지 않아도
