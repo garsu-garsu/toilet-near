@@ -13,6 +13,7 @@ import { useAdFreeAccess } from "../../hooks/useAdFreeAccess";
 import { EVENT, track, trackScreen } from "../../lib/analytics";
 import { formatDistance, walkMinutes, type LatLng } from "../../lib/geo";
 import { hoursLabel } from "../../lib/hours";
+import { isLocationAllowed } from "../../lib/locationPermission";
 import {
   directionsUrl,
   forgetMapApp,
@@ -33,6 +34,8 @@ import {
 import { palette, stateStyle } from "../../theme";
 
 type Phase =
+  /** 아직 위치 권한이 없어서 사용자가 눌러주길 기다리는 상태. */
+  | { k: "needLocation" }
   | { k: "locating" }
   | { k: "ready"; me: LatLng; all: Toilet[] }
   | { k: "denied" }
@@ -89,7 +92,7 @@ function initialTab(): Tab {
 }
 
 export function HomeScreen({ onOpenSponsor }: { onOpenSponsor: () => void }) {
-  const [phase, setPhase] = useState<Phase>({ k: "locating" });
+  const [phase, setPhase] = useState<Phase>({ k: "needLocation" });
   const [tab, setTab] = useState<Tab>(initialTab);
   const [radius, setRadius] = useState<Radius>(1000);
   const [picked, setPicked] = useState<Toilet | null>(null);
@@ -145,10 +148,15 @@ export function HomeScreen({ onOpenSponsor }: { onOpenSponsor: () => void }) {
     }
   }, []);
 
-  // 급한 사람에게 버튼을 한 번 더 누르게 하지 않아요. 열자마자 찾습니다.
+  // 급한 사람에게 버튼을 한 번 더 누르게 하지 않는 게 원칙이라 열자마자 찾았지만,
+  // 앱을 켜자마자 위치를 물으면 권한 바텀시트가 진입 직후 뜨고 그게 심사 반려
+  // 사유입니다(진료중·오늘바다 20260818-16). 그래서 **이미 허용된 사람에게는
+  // 그대로 열자마자** 찾고, 아직 허용 전인 사람에게만 버튼을 한 번 보여줘요.
   useEffect(() => {
     trackScreen("home");
-    void locate();
+    void (async () => {
+      if (await isLocationAllowed()) void locate();
+    })();
   }, [locate]);
 
   /**
@@ -203,6 +211,15 @@ export function HomeScreen({ onOpenSponsor }: { onOpenSponsor: () => void }) {
     <div style={{ height: "100%", display: "flex", flexDirection: "column", background: palette.bg, position: "relative" }}>
       {/* ---------------------------------------------------------- 본문 */}
       <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
+        {phase.k === "needLocation" && (
+          <Center>
+            <Notice
+              text="지금 열려 있는 화장실을 내 주변에서 찾아드려요."
+              action={{ label: "내 주변 화장실 찾기", onClick: () => void locate() }}
+            />
+          </Center>
+        )}
+
         {phase.k === "locating" && <Center><Notice text="주변을 찾고 있어요…" /></Center>}
 
         {phase.k === "denied" && (
